@@ -57,24 +57,24 @@ class KISAuth:
 
                 access_token = result.get("access_token")
                 if access_token:
-                    logger.info("Successfully obtained KIS access token")
+                    logger.info("🔑 KIS 액세스 토큰 발급 성공")
                     return access_token
                 else:
-                    logger.error(f"Unexpected token response: {result}")
+                    logger.error(f"❌ 토큰 응답 오류: {result}")
                     return None
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error requesting token: {e}")
+            logger.error(f"❌ 토큰 요청 HTTP 오류: {e}")
             return None
         except Exception as e:
-            logger.error(f"Error requesting KIS token: {e}")
+            logger.error(f"❌ KIS 토큰 요청 실패: {e}")
             return None
 
     async def invalidate_token(self):
         """Invalidate cached token"""
         cache_key = "kis:access_token"
         await redis_client.delete(cache_key)
-        logger.info("KIS access token invalidated")
+        logger.info("🗑️ KIS 액세스 토큰 삭제 완료")
 
 
 # Global auth instance

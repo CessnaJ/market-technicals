@@ -18,14 +18,16 @@ router = APIRouter(prefix="/fetch", tags=["fetch"])
 @router.post("/{ticker}")
 async def fetch_stock_data(
     ticker: str,
+    force_refresh: bool = False,
     db: AsyncSession = Depends(get_db),
     background_tasks: BackgroundTasks = None,
-):
+    ):
     """
     Fetch data for a specific stock from KIS API
 
     Args:
         ticker: Stock ticker (e.g., "010950")
+        force_refresh: Force refresh from KIS API (bypass cache)
     """
     # Get or create stock in database
     current_price = await kis_price_service.get_current_price(ticker)
@@ -44,11 +46,19 @@ async def fetch_stock_data(
     )
 
     # Fetch historical OHLCV data
-    ohlcv_data = await kis_price_service.get_daily_price(ticker, use_cache=False)
+    # If force_refresh is True, disable cache and fetch fresh data
+    ohlcv_data = await kis_price_service.get_daily_price(
+        ticker,
+        use_cache=not force_refresh
+    )
 
     if ohlcv_data:
-        saved_count = await data_service.save_ohlcv_daily(db, stock.id, ohlcv_data)
-        logger.info(f"Saved {saved_count} daily OHLCV records for {ticker}")
+        # Use overwrite=True when force_refresh is True to replace existing data
+        saved_count = await data_service.save_ohlcv_daily(
+            db, stock.id, ohlcv_data,
+            overwrite=force_refresh
+        )
+        logger.info(f"🐤 [{ticker}] 일봉 데이터 {saved_count}건 저장 완료")
 
         # Convert to weekly
         await data_service.convert_daily_to_weekly(db, stock.id)
@@ -122,7 +132,7 @@ async def fetch_batch_data(
                     })
 
                     logger.info(
-                        f"Fetched {saved_count} records for {item.ticker} ({item.name})"
+                        f"🐤 [{item.ticker}] {item.name} - {saved_count}건 수집 완료"
                     )
                 else:
                     results.append({
@@ -143,7 +153,7 @@ async def fetch_batch_data(
             await asyncio.sleep(0.1)
 
         except Exception as e:
-            logger.error(f"Error fetching data for {item.ticker}: {e}")
+            logger.error(f"❌ [{item.ticker}] 데이터 수집 실패: {e}")
             results.append({
                 "ticker": item.ticker,
                 "name": item.name,

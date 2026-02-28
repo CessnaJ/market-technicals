@@ -39,7 +39,7 @@ class RedisClient:
         try:
             return await client.get(key)
         except Exception as e:
-            logger.error(f"Redis get error for key {key}: {e}")
+            logger.error(f"❌ Redis GET 오류 (key: {key}): {e}")
             return None
 
     async def set(
@@ -54,7 +54,7 @@ class RedisClient:
             await client.set(key, value, ex=expire)
             return True
         except Exception as e:
-            logger.error(f"Redis set error for key {key}: {e}")
+            logger.error(f"❌ Redis SET 오류 (key: {key}): {e}")
             return False
 
     async def get_json(self, key: str) -> Optional[Any]:
@@ -64,7 +64,7 @@ class RedisClient:
             try:
                 return json.loads(value)
             except json.JSONDecodeError as e:
-                logger.error(f"Redis JSON decode error for key {key}: {e}")
+                logger.error(f"❌ Redis JSON 디코딩 오류 (key: {key}): {e}")
         return None
 
     async def set_json(
@@ -78,7 +78,7 @@ class RedisClient:
             json_value = json.dumps(value, ensure_ascii=False)
             return await self.set(key, json_value, expire)
         except Exception as e:
-            logger.error(f"Redis JSON set error for key {key}: {e}")
+            logger.error(f"❌ Redis JSON 저장 오류 (key: {key}): {e}")
             return False
 
     async def delete(self, key: str) -> bool:
@@ -88,7 +88,7 @@ class RedisClient:
             await client.delete(key)
             return True
         except Exception as e:
-            logger.error(f"Redis delete error for key {key}: {e}")
+            logger.error(f"❌ Redis DELETE 오류 (key: {key}): {e}")
             return False
 
     async def exists(self, key: str) -> bool:
@@ -97,7 +97,7 @@ class RedisClient:
         try:
             return await client.exists(key) > 0
         except Exception as e:
-            logger.error(f"Redis exists error for key {key}: {e}")
+            logger.error(f"❌ Redis EXISTS 오류 (key: {key}): {e}")
             return False
 
     async def delete_pattern(self, pattern: str) -> int:
@@ -109,7 +109,7 @@ class RedisClient:
                 return await client.delete(*keys)
             return 0
         except Exception as e:
-            logger.error(f"Redis delete pattern error for {pattern}: {e}")
+            logger.error(f"❌ Redis 패턴 삭제 오류 (pattern: {pattern}): {e}")
             return 0
 
 

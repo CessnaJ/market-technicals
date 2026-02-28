@@ -76,7 +76,7 @@ class KISAPIClient:
                         return response.json()
 
                 except httpx.HTTPStatusError as e:
-                    logger.error(f"HTTP error on attempt {attempt + 1}: {e}")
+                    logger.error(f"❌ HTTP 오류 (시도 {attempt + 1}/{self.retry_count}): {e}")
                     if e.response.status_code == 401:
                         # Token expired, invalidate and retry
                         await kis_auth.invalidate_token()
@@ -87,7 +87,7 @@ class KISAPIClient:
                         raise
 
                 except Exception as e:
-                    logger.error(f"Error on attempt {attempt + 1}: {e}")
+                    logger.error(f"❌ 요청 오류 (시도 {attempt + 1}/{self.retry_count}): {e}")
                     if attempt < self.retry_count - 1:
                         await asyncio.sleep(self.retry_delay * (2 ** attempt))
                     else:

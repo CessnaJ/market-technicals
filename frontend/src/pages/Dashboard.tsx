@@ -31,9 +31,12 @@ export default function Dashboard() {
     enabled: ticker.length > 0,
   })
 
-  const handleFetchData = async () => {
+  const handleForceRefreshData = async () => {
     try {
-      await apiClient.post(`/fetch/${ticker}`)
+      // Use force_refresh=true with POST to get fresh data from KIS API
+      await apiClient.post(`/fetch/${ticker}`, {
+        force_refresh: true
+      })
       window.location.reload()
     } catch (err: any) {
       console.error('Failed to fetch data:', err)
@@ -56,7 +59,7 @@ export default function Dashboard() {
                 className="px-4 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:border-blue-500 focus:outline-none w-48"
               />
               <button
-                onClick={handleFetchData}
+                onClick={handleForceRefreshData}
                 disabled={chartLoading || !ticker}
                 className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >

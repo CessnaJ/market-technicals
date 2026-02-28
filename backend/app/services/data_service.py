@@ -39,26 +39,37 @@ class DataService:
         db: AsyncSession,
         stock_id: int,
         ohlcv_data: List[dict],
+        overwrite: bool = True,  # Default to overwrite existing data
     ) -> int:
         """Save daily OHLCV data"""
         saved_count = 0
 
+        # If overwrite is True, delete existing data first
+        if overwrite:
+            await db.execute(
+                select(OHLCDaily).where(OHLCDaily.stock_id == stock_id)
+            )
+            logger.info(f"🐤 기존 데이터 삭제 완료 (stock_id: {stock_id})")
+
         for data in ohlcv_data:
-            # Check if data already exists
+            # Convert ISO string date to date object
+            date_obj = date.fromisoformat(data["date"]) if isinstance(data["date"], str) else data["date"]
+            
+            # Check if data already exists (only if not overwriting)
             result = await db.execute(
                 select(OHLCDaily).where(
                     and_(
                         OHLCDaily.stock_id == stock_id,
-                        OHLCDaily.date == data["date"],
+                        OHLCDaily.date == date_obj,
                     )
                 )
             )
             existing = result.scalar_one_or_none()
 
-            if not existing:
+            if not existing or overwrite:
                 ohlcv = OHLCDaily(
                     stock_id=stock_id,
-                    date=data["date"],
+                    date=date_obj,
                     open=data["open"],
                     high=data["high"],
                     low=data["low"],
@@ -105,12 +116,15 @@ class DataService:
         saved_count = 0
 
         for data in weekly_data:
+            # Convert ISO string date to date object
+            date_obj = date.fromisoformat(data["week_start"]) if isinstance(data["week_start"], str) else data["week_start"]
+            
             # Check if data already exists
             result = await db.execute(
                 select(OHLCWeekly).where(
                     and_(
                         OHLCWeekly.stock_id == stock_id,
-                        OHLCWeekly.week_start == data["week_start"],
+                        OHLCWeekly.week_start == date_obj,
                     )
                 )
             )
@@ -119,7 +133,7 @@ class DataService:
             if not existing:
                 ohlcv = OHLCWeekly(
                     stock_id=stock_id,
-                    week_start=data["week_start"],
+                    week_start=date_obj,
                     open=data["open"],
                     high=data["high"],
                     low=data["low"],

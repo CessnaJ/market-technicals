@@ -24,6 +24,7 @@ async def get_chart_data(
     end_date: Optional[date] = Query(None, description="End date"),
     scale: str = Query("linear", description="Scale: log or linear"),
     auto_fetch: bool = Query(True, description="Auto fetch data if not found"),
+    force_refresh: bool = Query(False, description="Force refresh from KIS API"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -69,6 +70,7 @@ async def get_chart_data(
             select(OHLCWeekly)
             .where(OHLCWeekly.stock_id == stock.id)
             .order_by(OHLCWeekly.week_start.desc())
+            .limit(365)
         )
         ohlcv_records = result.scalars().all()
 
@@ -88,6 +90,7 @@ async def get_chart_data(
             select(OHLCDaily)
             .where(OHLCDaily.stock_id == stock.id)
             .order_by(OHLCDaily.date.desc())
+            .limit(365)
         )
         ohlcv_records = result.scalars().all()
 
@@ -103,19 +106,19 @@ async def get_chart_data(
             for record in ohlcv_records
         ]
 
-    # Auto fetch with retry if no data
-    if not chart_data and auto_fetch:
-        logger.info(f"No OHLCV data found for {ticker}, attempting auto-fetch with retry")
+    # Auto fetch with retry if no data or force_refresh is True
+    if (not chart_data or force_refresh) and auto_fetch:
+        logger.info(f"🐤 [{ticker}] 데이터 없음 - 자동 수집 시도")
         
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # Fetch data from KIS API with date parameters
+                # Fetch data from KIS API with date parameters (always use_cache=False for force_refresh)
                 ohlcv_api_data = await kis_price_service.get_daily_price(
                     ticker,
                     start_date=start_date,
                     end_date=end_date,
-                    use_cache=False
+                    use_cache=not force_refresh  # Disable cache when force_refresh is True
                 )
                 
                 if ohlcv_api_data:
@@ -123,7 +126,7 @@ async def get_chart_data(
                     saved_count = await data_service.save_ohlcv_daily(
                         db, stock.id, ohlcv_api_data
                     )
-                    logger.info(f"Auto-fetch saved {saved_count} records for {ticker}")
+                    logger.info(f"🐤 [{ticker}] 자동 수집 완료 - {saved_count}건")
                     
                     # Convert to weekly if needed
                     if timeframe == "weekly":
@@ -172,11 +175,11 @@ async def get_chart_data(
                     if chart_data:
                         break  # Success, exit retry loop
                 else:
-                    logger.warning(f"Auto-fetch attempt {attempt + 1}/{max_retries} failed for {ticker}")
+                    logger.warning(f"⚠️ [{ticker}] 자동 수집 실패 ({attempt + 1}/{max_retries})")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(1)  # Wait 1 second before retry
             except Exception as e:
-                logger.error(f"Auto-fetch attempt {attempt + 1}/{max_retries} error for {ticker}: {e}")
+                logger.error(f"❌ [{ticker}] 자동 수집 오류 ({attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1)
 

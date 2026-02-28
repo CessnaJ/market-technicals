@@ -9,6 +9,7 @@ interface UseChartDataParams {
   enabled?: boolean;
   startDate?: string; // YYYY-MM-DD format
   endDate?: string;   // YYYY-MM-DD format
+  forceRefresh?: boolean; // Force refresh from KIS API
 }
 
 export function useChartData({
@@ -17,7 +18,8 @@ export function useChartData({
   scale = 'linear',
   enabled = true,
   startDate,
-  endDate
+  endDate,
+  forceRefresh
 }: UseChartDataParams) {
   const [data, setData] = useState<ChartDataResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -46,6 +48,9 @@ export function useChartData({
         if (endDate) {
           params.append('end_date', endDate)
         }
+        if (forceRefresh) {
+          params.append('force_refresh', 'true')
+        }
 
         const response = await apiClient.get<ChartDataResponse>(
           `/chart/${ticker}?${params.toString()}`
@@ -59,7 +64,7 @@ export function useChartData({
     }
 
     fetchData()
-  }, [ticker, timeframe, scale, enabled, startDate, endDate])
+  }, [ticker, timeframe, scale, enabled, startDate, endDate, forceRefresh])
 
   return { data, loading, error }
 }
