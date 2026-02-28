@@ -65,35 +65,54 @@ class KISPriceService:
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",  # J: 전체
             "FID_INPUT_ISCD": ticker,  # 종목코드
-            "FID_INPUT_DATE_1": end_date_str,  # 조회종료일
+            "FID_INPUT_DATE_1": start_date_str,  # 조회시작일
+            "FID_INPUT_DATE_2": end_date_str,  # 조회종료일
             "FID_PERIOD_DIV_CODE": "D",  # D: 일봉
-            "FID_ORG_ADJ_PRC": "0000000001",  # 수정주가 반영
+            "FID_ORG_ADJ_PRC": "1",  # 0: 수정주가, 1: 원주가
         }
 
         try:
-            response = await kis_client.get(
-                endpoint["path"],
-                params=params,
-                tr_id=endpoint["tr_id"],
-            )
+            # Use tr_cont for pagination (fetch more than 100 records)
+            all_data = []
+            tr_cont = ""
+            
+            while True:
+                headers = {}
+                if tr_cont:
+                    headers["tr_cont"] = tr_cont
+                
+                response = await kis_client.get(
+                    endpoint["path"],
+                    params=params,
+                    tr_id=endpoint["tr_id"],
+                    extra_headers=headers if headers else None,
+                )
 
-            if response and "output" in response:
-                data = response["output"]
-                # Parse and format data
-                ohlcv_data = self._parse_daily_price(data)
+                if response and "output" in response:
+                    data = response["output"]
+                    # Parse and format data
+                    ohlcv_data = self._parse_daily_price(data)
+                    all_data.extend(ohlcv_data)
+                    
+                    # Check if there's more data (tr_cont in response header)
+                    if response.get("tr_cont"):
+                        tr_cont = response["tr_cont"]
+                        logger.info(f"Continuing fetch for {ticker}, tr_cont: {tr_cont}")
+                    else:
+                        break
+                else:
+                    logger.error(f"Unexpected response for {ticker}: {response}")
+                    break
 
-                # Cache the result
-                if use_cache and ohlcv_data:
-                    await redis_client.set_json(
-                        cache_key,
-                        ohlcv_data,
-                        expire=settings.CACHE_TTL_HISTORICAL,
-                    )
+            # Cache the result
+            if use_cache and all_data:
+                await redis_client.set_json(
+                    cache_key,
+                    all_data,
+                    expire=settings.CACHE_TTL_HISTORICAL,
+                )
 
-                return ohlcv_data
-            else:
-                logger.error(f"Unexpected response for {ticker}: {response}")
-                return None
+            return all_data
 
         except Exception as e:
             logger.error(f"Error fetching daily price for {ticker}: {e}")
@@ -232,6 +251,7 @@ class KISPriceService:
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch historical data with pagination (max 100 days per request)
+        Note: Using tr_cont for automatic pagination now
 
         Args:
             ticker: Stock ticker
@@ -240,33 +260,24 @@ class KISPriceService:
         Returns:
             List of OHLCV data points
         """
-        all_data = []
         end_date = date.today()
-        remaining_days = days
+        start_date = end_date - timedelta(days=days)
 
-        while remaining_days > 0:
-            fetch_days = min(remaining_days, 100)
-            start_date = end_date - timedelta(days=fetch_days)
+        # Use get_daily_price with tr_cont support
+        data = await self.get_daily_price(
+            ticker=ticker,
+            start_date=start_date,
+            end_date=end_date,
+            use_cache=False,  # Don't use cache for historical fetch
+        )
 
-            data = await self.get_daily_price(
-                ticker=ticker,
-                start_date=start_date,
-                end_date=end_date,
-                use_cache=False,  # Don't use cache for historical fetch
-            )
+        if data:
+            # Remove duplicates and sort
+            unique_data = {item["date"]: item for item in data}
+            sorted_data = sorted(unique_data.values(), key=lambda x: x["date"])
+            return sorted_data
 
-            if data:
-                all_data.extend(data)
-                remaining_days -= len(data)
-                end_date = start_date - timedelta(days=1)
-            else:
-                break
-
-        # Remove duplicates and sort
-        unique_data = {item["date"]: item for item in all_data}
-        sorted_data = sorted(unique_data.values(), key=lambda x: x["date"])
-
-        return sorted_data
+        return None
 
 
 # Global price service instance

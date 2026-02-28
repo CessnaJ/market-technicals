@@ -32,6 +32,7 @@ class KISAPIClient:
             "authorization": f"Bearer {token}",
             "appkey": self.app_key,
             "appsecret": self.app_secret,
+            "custtype": "P",  # P: 일반(개인고객,법인고객), B: 제휴사
         }
 
     async def _request(
@@ -41,6 +42,7 @@ class KISAPIClient:
         params: Optional[Dict[str, Any]] = None,
         data: Optional[Dict[str, Any]] = None,
         tr_id: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Make API request with rate limiting and retry logic
@@ -50,6 +52,10 @@ class KISAPIClient:
 
         if tr_id:
             headers["tr_id"] = tr_id
+        
+        # Add extra headers (e.g., tr_cont for pagination)
+        if extra_headers:
+            headers.update(extra_headers)
 
         async with self._semaphore:
             for attempt in range(self.retry_count):
@@ -94,18 +100,20 @@ class KISAPIClient:
         path: str,
         params: Optional[Dict[str, Any]] = None,
         tr_id: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """GET request"""
-        return await self._request("GET", path, params=params, tr_id=tr_id)
+        return await self._request("GET", path, params=params, tr_id=tr_id, extra_headers=extra_headers)
 
     async def post(
         self,
         path: str,
         data: Optional[Dict[str, Any]] = None,
         tr_id: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """POST request"""
-        return await self._request("POST", path, data=data, tr_id=tr_id)
+        return await self._request("POST", path, data=data, tr_id=tr_id, extra_headers=extra_headers)
 
 
 # Global API client instance

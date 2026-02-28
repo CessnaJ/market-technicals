@@ -1,9 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.redis_client import redis_client
+from decimal import Decimal
+import json
 import logging
 
 # Configure logging
@@ -29,11 +32,19 @@ async def lifespan(app: FastAPI):
 
 
 # Create FastAPI application
+# Custom JSON encoder to handle Decimal properly
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Technical Analysis Dashboard for Korean Stock Market",
     version="1.0.0",
     lifespan=lifespan,
+    default_response_class=JSONResponse,
 )
 
 # Configure CORS

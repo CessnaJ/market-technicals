@@ -36,7 +36,7 @@ A comprehensive technical analysis dashboard for Korean stock market data using 
 ## Project Structure
 
 ```
-technical-dashboard/
+market-technicals/
 ├── docker-compose.yml
 ├── .env.example
 ├── backend/
@@ -72,7 +72,7 @@ technical-dashboard/
 
 1. Clone the repository
 ```bash
-cd technical-dashboard
+cd market-technicals
 ```
 
 2. Create environment file
