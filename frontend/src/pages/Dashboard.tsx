@@ -2,24 +2,22 @@ import { useState } from 'react'
 import { useChartData } from '../hooks/useChartData'
 import { useIndicators } from '../hooks/useIndicators'
 import CandlestickChart from '../components/Chart/CandlestickChart'
-import VolumePanel from '../components/Chart/VolumePanel'
-import IndicatorPanel from '../components/Chart/IndicatorPanel'
 import FinancialMetrics from '../components/FinancialMetrics'
 import Watchlist from '../components/Watchlist'
 import apiClient from '../api/client'
 import { COLORS } from '../types'
 
 export default function Dashboard() {
-  const[ticker, setTicker] = useState('010950')
+  const [ticker, setTicker] = useState('010950')
   const [timeframe, setTimeframe] = useState<'daily' | 'weekly'>('daily')
   const [scale, setScale] = useState<'linear' | 'log'>('linear')
   const [showSMA, setShowSMA] = useState(true)
   const [showBollinger, setShowBollinger] = useState(true)
-  const[showDarvas, setShowDarvas] = useState(true)
+  const [showDarvas, setShowDarvas] = useState(true)
   const [showFibonacci, setShowFibonacci] = useState(true)
   const [showWeinstein, setShowWeinstein] = useState(true)
+  const [activeIndicator, setActiveIndicator] = useState<'rsi' | 'macd' | 'vpci'>('rsi')
 
-  // ★ 수정됨: isRefetching과 refetch 함수를 꺼내옵니다.
   const { 
     data: chartData, 
     loading: chartLoading, 
@@ -40,7 +38,6 @@ export default function Dashboard() {
 
   const handleForceRefreshData = async () => {
     try {
-      // Use force_refresh=true with POST to get fresh data from KIS API
       await apiClient.post(`/fetch/${ticker}`, {
         force_refresh: true
       })
@@ -109,7 +106,6 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           {/* 왼쪽: 차트 영역 */}
           <div className="lg:col-span-3 space-y-4">
-            {/* 종목 정보 */}
             {chartData && (
               <div className="bg-gray-800 rounded-lg p-4">
                 <div className="flex justify-between items-center mb-4">
@@ -130,56 +126,48 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                {/* 지표 토글 */}
-                <div className="flex flex-wrap gap-2 mb-4">
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showSMA}
-                      onChange={(e) => setShowSMA(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>SMA</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showBollinger}
-                      onChange={(e) => setShowBollinger(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>Bollinger</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showDarvas}
-                      onChange={(e) => setShowDarvas(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>Darvas Box</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showFibonacci}
-                      onChange={(e) => setShowFibonacci(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>Fibonacci</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showWeinstein}
-                      onChange={(e) => setShowWeinstein(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>Weinstein Stage</span>
-                  </label>
+                {/* 지표 토글 & 하단 패널 탭 */}
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                  <div className="flex flex-wrap gap-4">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showSMA} onChange={(e) => setShowSMA(e.target.checked)} className="w-4 h-4"/>
+                      <span>SMA</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showBollinger} onChange={(e) => setShowBollinger(e.target.checked)} className="w-4 h-4"/>
+                      <span>Bollinger</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showDarvas} onChange={(e) => setShowDarvas(e.target.checked)} className="w-4 h-4"/>
+                      <span>Darvas Box</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showFibonacci} onChange={(e) => setShowFibonacci(e.target.checked)} className="w-4 h-4"/>
+                      <span>Fibonacci</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showWeinstein} onChange={(e) => setShowWeinstein(e.target.checked)} className="w-4 h-4"/>
+                      <span>Weinstein Stage</span>
+                    </label>
+                  </div>
+
+                  {/* 하단 지표 탭 UI */}
+                  <div className="flex gap-2 bg-gray-900 rounded-lg p-1">
+                    {(['rsi', 'macd', 'vpci'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setActiveIndicator(tab)}
+                        className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                          activeIndicator === tab ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        {tab.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                {/* 캔들 차트 */}
+                {/* 통합된 캔들 차트 */}
                 {chartData && (
                   <CandlestickChart
                     data={chartData.ohlcv}
@@ -193,21 +181,9 @@ export default function Dashboard() {
                     showDarvas={showDarvas}
                     showFibonacci={showFibonacci}
                     showWeinstein={showWeinstein}
-                    // ★ 수정됨: Lazy Loading 기능 배선
+                    activeIndicator={activeIndicator}
                     onLoadMore={refetch}
                     isRefetching={isRefetching}
-                  />
-                )}
-
-                {/* 거래량 패널 */}
-                {chartData && <VolumePanel data={chartData.ohlcv} />}
-
-                {/* 지표 패널 */}
-                {chartData && (
-                  <IndicatorPanel
-                    rsi={chartData.indicators?.rsi}
-                    macd={chartData.indicators?.macd}
-                    vpci={chartData.indicators?.vpci}
                   />
                 )}
               </div>
@@ -216,10 +192,8 @@ export default function Dashboard() {
 
           {/* 오른쪽: 사이드 패널 */}
           <div className="space-y-4">
-            {/* 관심종목 */}
             <Watchlist />
 
-            {/* 재무지표 */}
             {chartData && (
               <FinancialMetrics
                 weinstein={weinstein ?? undefined}
@@ -228,7 +202,6 @@ export default function Dashboard() {
               />
             )}
 
-            {/* API 문서 링크 */}
             <div className="bg-gray-800 rounded-lg p-4">
               <h3 className="text-lg font-semibold mb-3">API Documentation</h3>
               <a
@@ -243,7 +216,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* 최초 로딩 상태 (배경 전체 덮음) */}
         {chartLoading && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-gray-800 rounded-lg p-6">
@@ -253,7 +225,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* 에러 상태 */}
         {chartError && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-red-900 rounded-lg p-6">

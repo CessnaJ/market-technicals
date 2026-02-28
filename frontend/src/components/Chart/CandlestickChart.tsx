@@ -7,6 +7,9 @@ interface CandlestickChartProps {
   indicators?: {
     sma?: Record<string, IndicatorData[]>
     bollinger?: BollingerData[]
+    rsi?: IndicatorData[]
+    macd?: any[] // MACDData
+    vpci?: any[] // VPCIData
   }
   darvasBoxes?: DarvasBox[]
   fibonacci?: { levels: Record<string, number> }
@@ -17,7 +20,7 @@ interface CandlestickChartProps {
   showDarvas: boolean
   showFibonacci: boolean
   showWeinstein: boolean
-  // 추가된 Props: 데이터 추가 로드 콜백과 상태
+  activeIndicator: 'rsi' | 'macd' | 'vpci'
   onLoadMore?: () => void;
   isRefetching?: boolean; 
 }
@@ -34,17 +37,18 @@ export default function CandlestickChart({
   showDarvas,
   showFibonacci,
   showWeinstein,
+  activeIndicator,
   onLoadMore,     
   isRefetching,   
 }: CandlestickChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   
-  // 에러 수정: NodeJS.Timeout 대신 범용 ReturnType 사용
   const fetchThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   
   const seriesRefs = useRef<{
     candlestick?: any
+    volume?: any
     sma5?: any
     sma10?: any
     sma20?: any
@@ -56,15 +60,16 @@ export default function CandlestickChart({
     darvasBox?: any
     fibonacciLines?: any[]
     weinsteinBackground?: any
-  }>({})
+    indicatorSeries: any[]
+  }>({ indicatorSeries: [] })
 
-  // 1. 차트 초기화
+  // 1. 차트 초기화 및 레이아웃 분할
   useEffect(() => {
     if (!chartContainerRef.current) return
 
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
-      height: 500,
+      height: 600, // 패널이 늘어났으므로 높이 500 -> 600으로 증가
       layout: {
         background: { type: ColorType.Solid, color: COLORS.background },
         textColor: COLORS.text,
@@ -76,20 +81,43 @@ export default function CandlestickChart({
       crosshair: {
         mode: 1,
       },
-      rightPriceScale: {
-        mode: scale === 'log' ? 2 : 0,
-        borderColor: '#1f2937',
-      },
       timeScale: {
         borderColor: '#1f2937',
         timeVisible: true,
       },
+      // 메인 차트 영역 (상단 60%)
+      rightPriceScale: {
+        mode: scale === 'log' ? 2 : 0,
+        borderColor: '#1f2937',
+        scaleMargins: {
+          top: 0.05,
+          bottom: 0.4, 
+        },
+      },
+    })
+
+    // 거래량 스케일 (중단 15%)
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: {
+        top: 0.65,
+        bottom: 0.2,
+      },
+      visible: false, // y축 숫자 숨김
+    })
+
+    // 보조지표 스케일 (하단 20%)
+    chart.priceScale('indicator').applyOptions({
+      scaleMargins: {
+        top: 0.8,
+        bottom: 0,
+      },
+      borderColor: '#1f2937',
     })
 
     chartRef.current = chart
 
     // 캔들스틱 시리즈
-    const candlestickSeries = chart.addCandlestickSeries({
+    seriesRefs.current.candlestick = chart.addCandlestickSeries({
       upColor: COLORS.candleUp,
       downColor: COLORS.candleDown,
       borderUpColor: COLORS.candleUp,
@@ -97,17 +125,21 @@ export default function CandlestickChart({
       wickUpColor: COLORS.candleUp,
       wickDownColor: COLORS.candleDown,
     })
-    seriesRefs.current.candlestick = candlestickSeries
+
+    // 거래량 시리즈
+    seriesRefs.current.volume = chart.addHistogramSeries({
+      priceScaleId: 'volume',
+      priceFormat: { type: 'volume' },
+    })
 
     // Weinstein Stage 배경색
     if (showWeinstein && weinstein) {
-      const weinsteinSeries = chart.addAreaSeries({
+      seriesRefs.current.weinsteinBackground = chart.addAreaSeries({
         lineColor: 'transparent',
         topColor: getWeinsteinColor(weinstein.current_stage),
         bottomColor: 'transparent',
         priceLineVisible: false,
       })
-      seriesRefs.current.weinsteinBackground = weinsteinSeries
     }
 
     return () => {
@@ -115,22 +147,20 @@ export default function CandlestickChart({
     }
   },[])
 
-  // 2. ★ 스크롤 감지 및 Lazy Loading 로직 (추가됨) ★
+  // 2. 스크롤 감지 및 Lazy Loading 로직
   useEffect(() => {
     if (!chartRef.current || !onLoadMore) return;
 
     const handleVisibleLogicalRangeChange = (logicalRange: LogicalRange | null) => {
       if (!logicalRange) return;
 
-      // 과거 데이터(왼쪽)로 스크롤 시 logicalRange.from 이 0에 가까워집니다.
-      // 10 캔들 정도 남았을 때 데이터를 더 가져오도록 트리거합니다.
       if (logicalRange.from < 10 && !isRefetching) {
-        if (fetchThrottleRef.current) return; // 이미 디바운스 대기중이면 무시
+        if (fetchThrottleRef.current) return;
 
         fetchThrottleRef.current = setTimeout(() => {
-          onLoadMore(); // 백엔드에 1년치 풀데이터를 다시 요청(refetch)
+          onLoadMore();
           fetchThrottleRef.current = null;
-        }, 1000); // 연속 호출 방지를 위해 1초 제한
+        }, 1000);
       }
     };
 
@@ -149,9 +179,11 @@ export default function CandlestickChart({
   useEffect(() => {
     if (!chartRef.current || !seriesRefs.current.candlestick) return
 
-    // 캔들 데이터 - 시간순으로 정렬 (결측치 필터링 및 숫자 변환 포함)
-    const candleData: CandlestickData[] = data
-      .filter(d => d.date && d.open != null && d.high != null && d.low != null && d.close != null)
+    // 유효한 데이터 필터링
+    const validData = data.filter(d => d.date && d.open != null && d.high != null && d.low != null && d.close != null)
+
+    // 캔들 데이터
+    const candleData: CandlestickData[] = validData
       .map((d) => ({
         time: new Date(d.date).getTime() / 1000 as Time,
         open: Number(d.open),
@@ -162,6 +194,19 @@ export default function CandlestickChart({
       .sort((a, b) => (a.time as number) - (b.time as number))
       
     seriesRefs.current.candlestick.setData(candleData)
+
+    // 거래량 데이터 주입 (양봉/음봉 색상 구분)
+    const volumeData = validData
+      .map((d) => ({
+        time: new Date(d.date).getTime() / 1000 as Time,
+        value: Number(d.volume || 0),
+        color: Number(d.close) >= Number(d.open) ? 'rgba(34, 197, 94, 0.4)' : 'rgba(239, 68, 68, 0.4)'
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number))
+
+    if (seriesRefs.current.volume) {
+      seriesRefs.current.volume.setData(volumeData)
+    }
 
     // SMA 라인
     if (showSMA && indicators?.sma) {
@@ -187,7 +232,7 @@ export default function CandlestickChart({
       updateFibonacci(chartRef.current, seriesRefs.current, fibonacci.levels)
     }
 
-    // Weinstein 배경색 업데이트 (원시 data가 아닌 정제된 candleData 사용)
+    // Weinstein 배경색
     if (showWeinstein && weinstein && seriesRefs.current.weinsteinBackground) {
       const maValue = Number(weinstein.ma_30w) || 0
       const weinsteinData = candleData.map((d) => ({
@@ -196,7 +241,11 @@ export default function CandlestickChart({
       }))
       seriesRefs.current.weinsteinBackground.setData(weinsteinData)
     }
-  }, [data, indicators, darvasBoxes, fibonacci, weinstein, showSMA, showBollinger, showDarvas, showFibonacci, showWeinstein])
+
+    // 하단 보조지표 업데이트 (RSI, MACD, VPCI)
+    updateBottomIndicator(chartRef.current, seriesRefs.current, activeIndicator, indicators)
+
+  }, [data, indicators, darvasBoxes, fibonacci, weinstein, showSMA, showBollinger, showDarvas, showFibonacci, showWeinstein, activeIndicator])
 
   // 스케일 변경
   useEffect(() => {
@@ -224,19 +273,106 @@ export default function CandlestickChart({
 
   return (
     <div className="relative w-full">
-      {/* 데이터 새로고침(백그라운드 조회) 중일 때 좌측 상단에 작은 안내 뱃지 렌더링 */}
       {isRefetching && (
         <div className="absolute top-2 left-2 z-10 bg-gray-800 text-xs text-white px-2 py-1 rounded shadow-md opacity-70">
           과거 데이터 로딩 중...
         </div>
       )}
-      <div ref={chartContainerRef} className="w-full h-[500px]" />
+      <div ref={chartContainerRef} className="w-full h-[600px]" />
     </div>
   )
 }
 
 // ----------------------
-// 헬퍼 함수들 (기존과 동일)
+// 하단 지표 렌더링 함수
+// ----------------------
+function updateBottomIndicator(chart: IChartApi, refs: any, type: string, indicators: any) {
+  // 1. 기존에 그려진 하단 지표 모두 지우기
+  if (refs.indicatorSeries.length > 0) {
+    refs.indicatorSeries.forEach((s: any) => chart.removeSeries(s))
+    refs.indicatorSeries = []
+  }
+
+  if (!indicators) return
+
+  if (type === 'rsi' && indicators.rsi) {
+    // 수정: lineWidth를 1.5에서 2로 변경
+    const rsiSeries = chart.addLineSeries({ priceScaleId: 'indicator', color: '#8b5cf6', lineWidth: 2 })
+    
+    rsiSeries.setData(indicators.rsi
+      .filter((d: any) => d.value != null && !isNaN(Number(d.value)))
+      .map((d: any) => ({
+        time: new Date(d.date).getTime() / 1000 as Time, 
+        value: Number(d.value)
+      }))
+      .sort((a: any, b: any) => a.time - b.time)
+    )
+
+    // 과매수/과매도 기준선
+    rsiSeries.createPriceLine({ price: 70, color: '#ef4444', lineStyle: 2, axisLabelVisible: false })
+    rsiSeries.createPriceLine({ price: 30, color: '#22c55e', lineStyle: 2, axisLabelVisible: false })
+    
+    refs.indicatorSeries.push(rsiSeries)
+  } 
+  
+  else if (type === 'macd' && indicators.macd) {
+    const macdHist = chart.addHistogramSeries({ priceScaleId: 'indicator', base: 0 })
+    // 수정: lineWidth를 1.5에서 2로 변경
+    const macdLine = chart.addLineSeries({ priceScaleId: 'indicator', color: '#3b82f6', lineWidth: 2 })
+    const signalLine = chart.addLineSeries({ priceScaleId: 'indicator', color: '#f59e0b', lineWidth: 2 })
+
+    const validData = indicators.macd.filter((d: any) => d.value != null && !isNaN(Number(d.value)))
+    
+    macdHist.setData(validData.map((d: any) => ({
+      time: new Date(d.date).getTime() / 1000 as Time, 
+      value: Number(d.histogram),
+      color: Number(d.histogram) >= 0 ? 'rgba(34, 197, 94, 0.5)' : 'rgba(239, 68, 68, 0.5)'
+    })).sort((a: any, b: any) => a.time - b.time))
+
+    macdLine.setData(validData.map((d: any) => ({
+      time: new Date(d.date).getTime() / 1000 as Time, 
+      value: Number(d.value)
+    })).sort((a: any, b: any) => a.time - b.time))
+
+    signalLine.setData(validData.map((d: any) => ({
+      time: new Date(d.date).getTime() / 1000 as Time, 
+      value: Number(d.signal)
+    })).sort((a: any, b: any) => a.time - b.time))
+
+    refs.indicatorSeries.push(macdHist, macdLine, signalLine)
+  } 
+  
+  else if (type === 'vpci' && indicators.vpci) {
+    // 수정: lineWidth를 1.5에서 2로 변경
+    const vpciSeries = chart.addLineSeries({ priceScaleId: 'indicator', color: COLORS.text, lineWidth: 2 })
+    const validData = indicators.vpci.filter((d: any) => d.value != null && !isNaN(Number(d.value)))
+    
+    vpciSeries.setData(validData.map((d: any) => ({
+      time: new Date(d.date).getTime() / 1000 as Time, 
+      value: Number(d.value)
+    })).sort((a: any, b: any) => a.time - b.time))
+
+    // 다이버전스 마커
+    const markers = validData
+      .filter((d: any) => d.signal && d.signal.includes('DIVERGE'))
+      .map((d: any) => ({
+        time: new Date(d.date).getTime() / 1000 as Time,
+        position: d.signal === 'DIVERGE_BEAR' ? 'aboveBar' : 'belowBar',
+        color: d.signal === 'DIVERGE_BEAR' ? '#ef4444' : '#22c55e',
+        shape: 'circle',
+        size: 1
+      }))
+    
+    if (markers.length > 0) {
+      vpciSeries.setMarkers(markers)
+    }
+    
+    refs.indicatorSeries.push(vpciSeries)
+  }
+}
+
+// ----------------------
+// 헬퍼 함수들
 // ----------------------
 function updateSMA(chart: IChartApi, refs: any, period: string, data: IndicatorData[] | undefined) {
   const key = `sma${period}` as keyof typeof refs
@@ -249,11 +385,10 @@ function updateSMA(chart: IChartApi, refs: any, period: string, data: IndicatorD
   }
 
   const smaData: LineData[] = data
-    // 수정: null 뿐만 아니라 숫자로 변환 불가능한 값(NaN)도 필터링
     .filter(d => d.value != null && !isNaN(Number(d.value))) 
     .map((d) => ({
       time: new Date(d.date).getTime() / 1000 as Time,
-      value: Number(d.value), // 수정: 확실한 Number 타입 캐스팅
+      value: Number(d.value), 
     }))
     .sort((a, b) => (a.time as number) - (b.time as number))
 
@@ -285,7 +420,6 @@ function updateBollinger(chart: IChartApi, refs: any, data: BollingerData[] | un
     return
   }
 
-  // 상단, 중단, 하단 모두 Number 캐스팅 및 isNaN 필터링 적용
   const mapBollinger = (key: keyof BollingerData) => 
     data
       .filter(d => d[key] != null && !isNaN(Number(d[key])))
@@ -316,7 +450,6 @@ function updateDarvasBoxes(chart: IChartApi, refs: any, boxes: DarvasBox[]) {
   if (!boxes || boxes.length === 0) return
 
   const activeBox = boxes.find((b) => b.status === 'ACTIVE')
-  // 수정: top, bottom 값 존재 여부 확실히 체크
   if (!activeBox || activeBox.top == null || activeBox.bottom == null) return
 
   const topLine = chart.addLineSeries({ color: COLORS.darvasBorder, lineWidth: 2, priceLineVisible: false })
@@ -325,7 +458,6 @@ function updateDarvasBoxes(chart: IChartApi, refs: any, boxes: DarvasBox[]) {
   let startDate = new Date(activeBox.start_date).getTime() / 1000
   let endDate = activeBox.end_date ? new Date(activeBox.end_date).getTime() / 1000 : Date.now() / 1000
 
-  // 수정: 반드시 오름차순 시간 배열이 되도록 방어 코드 추가
   if (startDate > endDate) {
     [startDate, endDate] = [endDate, startDate];
   }
@@ -362,7 +494,6 @@ function updateFibonacci(chart: IChartApi, refs: any, levels: Record<string, num
       })
 
       const now = Date.now() / 1000
-      // 수정: 과거 시간이 인덱스 0, 현재 시간이 인덱스 1에 오도록 배열 순서 교체 (오름차순)
       line.setData([
         { time: (now - 86400 * 365) as Time, value: Number(price) },
         { time: now as Time, value: Number(price) },
