@@ -7,9 +7,18 @@ interface UseChartDataParams {
   timeframe?: 'daily' | 'weekly';
   scale?: 'linear' | 'log';
   enabled?: boolean;
+  startDate?: string; // YYYY-MM-DD format
+  endDate?: string;   // YYYY-MM-DD format
 }
 
-export function useChartData({ ticker, timeframe = 'daily', scale = 'linear', enabled = true }: UseChartDataParams) {
+export function useChartData({
+  ticker,
+  timeframe = 'daily',
+  scale = 'linear',
+  enabled = true,
+  startDate,
+  endDate
+}: UseChartDataParams) {
   const [data, setData] = useState<ChartDataResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -25,8 +34,21 @@ export function useChartData({ ticker, timeframe = 'daily', scale = 'linear', en
       setLoading(true)
       setError(null)
       try {
+        // Build query parameters
+        const params = new URLSearchParams({
+          timeframe,
+          scale,
+        })
+        
+        if (startDate) {
+          params.append('start_date', startDate)
+        }
+        if (endDate) {
+          params.append('end_date', endDate)
+        }
+
         const response = await apiClient.get<ChartDataResponse>(
-          `/chart/${ticker}?timeframe=${timeframe}&scale=${scale}`
+          `/chart/${ticker}?${params.toString()}`
         )
         setData(response.data)
       } catch (err: any) {
@@ -37,7 +59,7 @@ export function useChartData({ ticker, timeframe = 'daily', scale = 'linear', en
     }
 
     fetchData()
-  }, [ticker, timeframe, scale, enabled])
+  }, [ticker, timeframe, scale, enabled, startDate, endDate])
 
   return { data, loading, error }
 }

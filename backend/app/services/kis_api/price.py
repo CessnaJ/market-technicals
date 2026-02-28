@@ -51,11 +51,11 @@ class KISPriceService:
                 logger.info(f"Cache hit for {ticker} daily price")
                 return cached_data
 
-        # Set default dates
+        # Set default dates (1 year by default)
         if end_date is None:
             end_date = date.today()
         if start_date is None:
-            start_date = end_date - timedelta(days=100)
+            start_date = end_date - timedelta(days=365)
 
         # Format dates for KIS API (YYYYMMDD)
         end_date_str = end_date.strftime("%Y%m%d")

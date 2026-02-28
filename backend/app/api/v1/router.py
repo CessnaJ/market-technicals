@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import watchlist, fetch, chart, signals
+from app.api.v1 import watchlist, fetch, chart, signals, indicators, financial
 
 router = APIRouter()
 
@@ -8,6 +8,8 @@ router.include_router(watchlist.router)
 router.include_router(fetch.router)
 router.include_router(chart.router)
 router.include_router(signals.router)
+router.include_router(indicators.router)
+router.include_router(financial.router)
 
 # Health check for v1 API
 @router.get("/health")

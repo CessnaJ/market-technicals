@@ -75,11 +75,11 @@ async def get_chart_data(
         chart_data = [
             ChartDataPoint(
                 date=record.week_start,
-                open=record.open,
-                high=record.high,
-                low=record.low,
-                close=record.close,
-                volume=record.volume,
+                open=float(record.open) if record.open else 0,
+                high=float(record.high) if record.high else 0,
+                low=float(record.low) if record.low else 0,
+                close=float(record.close) if record.close else 0,
+                volume=int(record.volume) if record.volume else 0,
             )
             for record in ohlcv_records
         ]
@@ -94,11 +94,11 @@ async def get_chart_data(
         chart_data = [
             ChartDataPoint(
                 date=record.date,
-                open=record.open,
-                high=record.high,
-                low=record.low,
-                close=record.close,
-                volume=record.volume,
+                open=float(record.open) if record.open else 0,
+                high=float(record.high) if record.high else 0,
+                low=float(record.low) if record.low else 0,
+                close=float(record.close) if record.close else 0,
+                volume=int(record.volume) if record.volume else 0,
             )
             for record in ohlcv_records
         ]
@@ -110,9 +110,12 @@ async def get_chart_data(
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # Fetch data from KIS API
+                # Fetch data from KIS API with date parameters
                 ohlcv_api_data = await kis_price_service.get_daily_price(
-                    ticker, use_cache=False
+                    ticker,
+                    start_date=start_date,
+                    end_date=end_date,
+                    use_cache=False
                 )
                 
                 if ohlcv_api_data:
@@ -229,7 +232,7 @@ async def _calculate_basic_indicators(
     for period in periods:
         if len(df) >= period:
             sma_values[str(period)] = [
-                {"date": df.iloc[i]["date"], "value": df.iloc[i]["close"]}
+                {"date": df.iloc[i]["date"], "value": float(df.iloc[i]["close"])}
                 for i in range(period, len(df))
             ]
         else:
@@ -257,29 +260,69 @@ async def _calculate_basic_indicators(
     df["bb_upper"] = df["bb_middle"] + (bb_std * 2)
     df["bb_lower"] = df["bb_middle"] - (bb_std * 2)
 
+    # Calculate VPCI (Volume Price Confirmation Indicator)
+    # VPC (Volume Price Confirmation) - SMA of close weighted by volume
+    df["vpc"] = (df["close"] * df["volume"]).rolling(window=14).sum() / df["volume"].rolling(window=14).sum()
+    # VPR (Volume Price Ratio) - VPC / SMA
+    df["vpr"] = df["vpc"] / df["close"].rolling(window=14).mean()
+    # VM (Volume Moving Average)
+    df["vm"] = df["volume"].rolling(window=14).mean()
+    # VPCI = VPC * VPR / VM
+    df["vpci"] = df["vpc"] * df["vpr"] / df["vm"]
+
+    # Determine VPCI signal
+    def get_vpci_signal(vpci: float) -> str:
+        if pd.isna(vpci):
+            return "NEUTRAL"
+        if vpci > 0:
+            if vpci > df["vpci"].rolling(window=14).mean().iloc[-1]:
+                return "CONFIRM_BULL"
+            else:
+                return "DIVERGE_BULL"
+        else:
+            if vpci < df["vpci"].rolling(window=14).mean().iloc[-1]:
+                return "CONFIRM_BEAR"
+            else:
+                return "DIVERGE_BEAR"
+
+    df["vpci_signal"] = df["vpci"].apply(get_vpci_signal)
+
     indicators = {
         "sma": sma_values,
         "macd": [
             {
                 "date": df.iloc[i]["date"],
-                "macd": df.iloc[i]["macd"],
-                "signal": df.iloc[i]["macd_signal"],
-                "histogram": df.iloc[i]["macd_histogram"],
+                "value": float(df.iloc[i]["macd"]),
+                "macd": float(df.iloc[i]["macd"]),
+                "signal": float(df.iloc[i]["macd_signal"]),
+                "histogram": float(df.iloc[i]["macd_histogram"]),
             }
             for i in range(26, len(df))
         ],
         "rsi": [
-            {"date": df.iloc[i]["date"], "value": df.iloc[i]["rsi"]}
+            {"date": df.iloc[i]["date"], "value": float(df.iloc[i]["rsi"])}
             for i in range(14, len(df))
         ],
         "bollinger": [
             {
                 "date": df.iloc[i]["date"],
-                "upper": df.iloc[i]["bb_upper"],
-                "middle": df.iloc[i]["bb_middle"],
-                "lower": df.iloc[i]["bb_lower"],
+                "value": float(df.iloc[i]["bb_middle"]),
+                "upper": float(df.iloc[i]["bb_upper"]),
+                "middle": float(df.iloc[i]["bb_middle"]),
+                "lower": float(df.iloc[i]["bb_lower"]),
             }
             for i in range(20, len(df))
+        ],
+        "vpci": [
+            {
+                "date": df.iloc[i]["date"],
+                "value": float(df.iloc[i]["vpci"]) if pd.notna(df.iloc[i]["vpci"]) else None,
+                "vpc": float(df.iloc[i]["vpc"]) if pd.notna(df.iloc[i]["vpc"]) else None,
+                "vpr": float(df.iloc[i]["vpr"]) if pd.notna(df.iloc[i]["vpr"]) else None,
+                "vm": float(df.iloc[i]["vm"]) if pd.notna(df.iloc[i]["vm"]) else None,
+                "signal": str(df.iloc[i]["vpci_signal"]) if pd.notna(df.iloc[i]["vpci_signal"]) else None,
+            }
+            for i in range(14, len(df))
         ],
     }
 

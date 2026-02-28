@@ -109,14 +109,31 @@ export default function CandlestickChart({
   useEffect(() => {
     if (!chartRef.current || !seriesRefs.current.candlestick) return
 
-    // 캔들 데이터
-    const candleData: CandlestickData[] = data.map((d) => ({
-      time: new Date(d.date).getTime() / 1000 as Time,
-      open: d.open,
-      high: d.high,
-      low: d.low,
-      close: d.close,
-    }))
+    // 캔들 데이터 - 시간순으로 정렬 (오래된 것부터 최신 것)
+    const candleData: CandlestickData[] = data
+      .filter(d => {
+        const isValid = d.date &&
+          d.open != null &&
+          d.high != null &&
+          d.low != null &&
+          d.close != null
+        return isValid
+      })
+      .map((d) => {
+        const mapped = {
+          time: new Date(d.date).getTime() / 1000 as Time,
+          open: Number(d.open),
+          high: Number(d.high),
+          low: Number(d.low),
+          close: Number(d.close),
+        }
+        return mapped
+      })
+      .sort((a, b) => {
+        const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
+        const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
+        return timeA - timeB // 오래된 것부터 최신 것 순으로 정렬
+      })
     seriesRefs.current.candlestick.setData(candleData)
 
     // SMA 라인
@@ -139,15 +156,16 @@ export default function CandlestickChart({
     }
 
     // 피보나치
-    if (showFibonacci && fibonacci) {
+    if (showFibonacci && fibonacci && fibonacci.levels) {
       updateFibonacci(chartRef.current, seriesRefs.current, fibonacci.levels)
     }
 
     // Weinstein 배경색 업데이트
     if (showWeinstein && weinstein && seriesRefs.current.weinsteinBackground) {
+      const maValue = weinstein.ma_30w ?? 0
       const weinsteinData = data.map((d) => ({
         time: new Date(d.date).getTime() / 1000 as Time,
-        value: weinstein.ma_30w,
+        value: maValue,
       }))
       seriesRefs.current.weinsteinBackground.setData(weinsteinData)
     }
@@ -193,10 +211,17 @@ function updateSMA(chart: IChartApi, refs: any, period: string, data: IndicatorD
     return
   }
 
-  const smaData: LineData[] = data.map((d) => ({
-    time: new Date(d.date).getTime() / 1000 as Time,
-    value: d.value,
-  }))
+  const smaData: LineData[] = data
+    .filter(d => d.value != null)
+    .map((d) => ({
+      time: new Date(d.date).getTime() / 1000 as Time,
+      value: d.value,
+    }))
+    .sort((a, b) => {
+      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
+      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
+      return timeA - timeB
+    })
 
   const colors: Record<string, string> = {
     '5': '#f59e0b',
@@ -228,20 +253,42 @@ function updateBollinger(chart: IChartApi, refs: any, data: BollingerData[] | un
     return
   }
 
-  const upperData: LineData[] = data.map((d) => ({
-    time: new Date(d.date).getTime() / 1000 as Time,
-    value: d.upper,
-  }))
+  const upperData: LineData[] = data
+    .filter(d => d.upper != null)
+    .map((d) => ({
+      time: new Date(d.date).getTime() / 1000 as Time,
+      value: d.upper,
+    }))
+    .sort((a, b) => {
+      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
+      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
+      return timeA - timeB
+    })
 
-  const middleData: LineData[] = data.map((d) => ({
-    time: new Date(d.date).getTime() / 1000 as Time,
-    value: d.middle,
-  }))
+  const middleData: LineData[] = data
+    .filter(d => d.middle != null)
+    .map((d) => ({
+      time: new Date(d.date).getTime() / 1000 as Time,
+      value: d.middle,
+    }))
+    .sort((a, b) => {
+      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
+      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
+      return timeA - timeB
+    })
 
-  const lowerData: LineData[] = data.map((d) => ({
-    time: new Date(d.date).getTime() / 1000 as Time,
-    value: d.lower,
-  }))
+  const lowerData: LineData[] = data
+    .filter(d => d.lower != null)
+    .map((d) => ({
+      time: new Date(d.date).getTime() / 1000 as Time,
+      value: d.lower,
+    }))
+    .sort((a, b) => {
+      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
+      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
+      return timeA - timeB
+    })
+
 
   if (!refs.bollingerUpper) {
     refs.bollingerUpper = chart.addLineSeries({

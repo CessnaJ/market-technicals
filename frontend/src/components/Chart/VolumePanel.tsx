@@ -52,12 +52,14 @@ export default function VolumePanel({ data }: VolumePanelProps) {
 
     // 평균 거래량 계산
     const avgVolume = data.reduce((sum, d) => sum + d.volume, 0) / data.length
-
-    const volumeData: HistogramData[] = data.map((d) => ({
-      time: new Date(d.date).getTime() / 1000 as Time,
-      value: d.volume,
-      color: d.volume >= avgVolume * 2 ? COLORS.volumeHigh : COLORS.volumeNormal,
-    }))
+    
+    const volumeData: HistogramData[] = data
+      .filter(d => d.date && d.volume)
+      .map((d) => ({
+        time: new Date(d.date).getTime() / 1000 as Time,
+        value: Number(d.volume),
+        color: d.volume >= avgVolume * 2 ? COLORS.volumeHigh : COLORS.volumeNormal,
+      }))
 
     volumeSeriesRef.current.setData(volumeData)
   }, [data])

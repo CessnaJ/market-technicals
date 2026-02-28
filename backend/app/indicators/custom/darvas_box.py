@@ -103,11 +103,11 @@ class DarvasBox:
             # Track new box formation
             if box_status.iloc[i - 1] in ["BROKEN_UP", "BROKEN_DOWN"]:
                 # Previous box broken, looking for new one
-                is_new_box = True
+                new_box_flag = True
             else:
-                is_new_box = False
+                new_box_flag = False
 
-            is_new_box.iloc[i] = is_new_box
+            is_new_box.iloc[i] = new_box_flag
 
         return {
             "box_top": box_top,
@@ -145,11 +145,11 @@ class DarvasBox:
             if status == "FORMING" and is_new_box.iloc[i]:
                 # New box forming
                 if current_box:
-                    current_box["end_date"] = df.index[i - 1]
+                    current_box["end_date"] = df["date"].iloc[i - 1]
                     boxes.append(current_box)
-
+                
                 current_box = {
-                    "start_date": df.index[i],
+                    "start_date": df["date"].iloc[i],
                     "end_date": None,
                     "top": box_top.iloc[i],
                     "bottom": box_bottom.iloc[i],
@@ -159,13 +159,13 @@ class DarvasBox:
             elif status == "ACTIVE":
                 # Box active
                 if current_box and current_box["status"] == "ACTIVE":
-                    current_box["end_date"] = df.index[i - 1]
+                    current_box["end_date"] = df["date"].iloc[i - 1]
                     boxes.append(current_box)
                     current_box = None
-
+                
                 if not current_box:
                     current_box = {
-                        "start_date": df.index[i],
+                        "start_date": df["date"].iloc[i],
                         "end_date": None,
                         "top": box_top.iloc[i],
                         "bottom": box_bottom.iloc[i],
@@ -175,7 +175,7 @@ class DarvasBox:
             elif status in ["BROKEN_UP", "BROKEN_DOWN"]:
                 # Box broken
                 if current_box:
-                    current_box["end_date"] = df.index[i - 1]
+                    current_box["end_date"] = df["date"].iloc[i - 1]
                     boxes.append(current_box)
                     current_box = None
 
