@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { createChart, IChartApi, ColorType, LineData, CandlestickData, Time } from 'lightweight-charts'
+import { createChart, IChartApi, ColorType, LineData, CandlestickData, Time, LogicalRange } from 'lightweight-charts'
 import { OHLCV, IndicatorData, BollingerData, DarvasBox, WeinsteinData, COLORS } from '../../types'
 
 interface CandlestickChartProps {
@@ -17,6 +17,9 @@ interface CandlestickChartProps {
   showDarvas: boolean
   showFibonacci: boolean
   showWeinstein: boolean
+  // 추가된 Props: 데이터 추가 로드 콜백과 상태
+  onLoadMore?: () => void;
+  isRefetching?: boolean; 
 }
 
 export default function CandlestickChart({
@@ -31,9 +34,15 @@ export default function CandlestickChart({
   showDarvas,
   showFibonacci,
   showWeinstein,
+  onLoadMore,     
+  isRefetching,   
 }: CandlestickChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
+  
+  // 에러 수정: NodeJS.Timeout 대신 범용 ReturnType 사용
+  const fetchThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  
   const seriesRefs = useRef<{
     candlestick?: any
     sma5?: any
@@ -49,6 +58,7 @@ export default function CandlestickChart({
     weinsteinBackground?: any
   }>({})
 
+  // 1. 차트 초기화
   useEffect(() => {
     if (!chartContainerRef.current) return
 
@@ -103,9 +113,39 @@ export default function CandlestickChart({
     return () => {
       chart.remove()
     }
-  }, [])
+  },[])
 
-  // 데이터 업데이트
+  // 2. ★ 스크롤 감지 및 Lazy Loading 로직 (추가됨) ★
+  useEffect(() => {
+    if (!chartRef.current || !onLoadMore) return;
+
+    const handleVisibleLogicalRangeChange = (logicalRange: LogicalRange | null) => {
+      if (!logicalRange) return;
+
+      // 과거 데이터(왼쪽)로 스크롤 시 logicalRange.from 이 0에 가까워집니다.
+      // 10 캔들 정도 남았을 때 데이터를 더 가져오도록 트리거합니다.
+      if (logicalRange.from < 10 && !isRefetching) {
+        if (fetchThrottleRef.current) return; // 이미 디바운스 대기중이면 무시
+
+        fetchThrottleRef.current = setTimeout(() => {
+          onLoadMore(); // 백엔드에 1년치 풀데이터를 다시 요청(refetch)
+          fetchThrottleRef.current = null;
+        }, 1000); // 연속 호출 방지를 위해 1초 제한
+      }
+    };
+
+    chartRef.current.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
+
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
+      }
+      if (fetchThrottleRef.current) clearTimeout(fetchThrottleRef.current);
+    };
+  }, [onLoadMore, isRefetching]);
+
+
+  // 3. 데이터 업데이트
   useEffect(() => {
     if (!chartRef.current || !seriesRefs.current.candlestick) return
 
@@ -169,7 +209,7 @@ export default function CandlestickChart({
       }))
       seriesRefs.current.weinsteinBackground.setData(weinsteinData)
     }
-  }, [data, indicators, darvasBoxes, fibonacci, weinstein, showSMA, showBollinger, showDarvas, showFibonacci, showWeinstein])
+  },[data, indicators, darvasBoxes, fibonacci, weinstein, showSMA, showBollinger, showDarvas, showFibonacci, showWeinstein])
 
   // 스케일 변경
   useEffect(() => {
@@ -193,14 +233,24 @@ export default function CandlestickChart({
 
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-  }, [])
+  },[])
 
   return (
-    <div ref={chartContainerRef} className="w-full h-[500px]" />
+    <div className="relative w-full">
+      {/* 데이터 새로고침(백그라운드 조회) 중일 때 좌측 상단에 작은 안내 뱃지 렌더링 */}
+      {isRefetching && (
+        <div className="absolute top-2 left-2 z-10 bg-gray-800 text-xs text-white px-2 py-1 rounded shadow-md opacity-70">
+          과거 데이터 로딩 중...
+        </div>
+      )}
+      <div ref={chartContainerRef} className="w-full h-[500px]" />
+    </div>
   )
 }
 
-// 헬퍼 함수들
+// ----------------------
+// 헬퍼 함수들 (기존과 동일)
+// ----------------------
 function updateSMA(chart: IChartApi, refs: any, period: string, data: IndicatorData[] | undefined) {
   const key = `sma${period}` as keyof typeof refs
   if (!data || data.length === 0) {
@@ -359,7 +409,7 @@ function updateFibonacci(chart: IChartApi, refs: any, levels: Record<string, num
   // 기존 라인 제거
   if (refs.fibonacciLines) {
     refs.fibonacciLines.forEach((line: any) => chart.removeSeries(line))
-    refs.fibonacciLines = []
+    refs.fibonacciLines =[]
   }
 
   if (!levels || Object.keys(levels).length === 0) return

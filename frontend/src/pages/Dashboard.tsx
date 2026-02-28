@@ -10,16 +10,23 @@ import apiClient from '../api/client'
 import { COLORS } from '../types'
 
 export default function Dashboard() {
-  const [ticker, setTicker] = useState('010950')
+  const[ticker, setTicker] = useState('010950')
   const [timeframe, setTimeframe] = useState<'daily' | 'weekly'>('daily')
   const [scale, setScale] = useState<'linear' | 'log'>('linear')
   const [showSMA, setShowSMA] = useState(true)
   const [showBollinger, setShowBollinger] = useState(true)
-  const [showDarvas, setShowDarvas] = useState(true)
+  const[showDarvas, setShowDarvas] = useState(true)
   const [showFibonacci, setShowFibonacci] = useState(true)
   const [showWeinstein, setShowWeinstein] = useState(true)
 
-  const { data: chartData, loading: chartLoading, error: chartError } = useChartData({
+  // ★ 수정됨: isRefetching과 refetch 함수를 꺼내옵니다.
+  const { 
+    data: chartData, 
+    loading: chartLoading, 
+    isRefetching, 
+    refetch, 
+    error: chartError 
+  } = useChartData({
     ticker,
     timeframe,
     scale,
@@ -186,6 +193,9 @@ export default function Dashboard() {
                     showDarvas={showDarvas}
                     showFibonacci={showFibonacci}
                     showWeinstein={showWeinstein}
+                    // ★ 수정됨: Lazy Loading 기능 배선
+                    onLoadMore={refetch}
+                    isRefetching={isRefetching}
                   />
                 )}
 
@@ -204,36 +214,36 @@ export default function Dashboard() {
             )}
           </div>
 
-            {/* 오른쪽: 사이드 패널 */}
-            <div className="space-y-4">
-              {/* 관심종목 */}
-              <Watchlist />
+          {/* 오른쪽: 사이드 패널 */}
+          <div className="space-y-4">
+            {/* 관심종목 */}
+            <Watchlist />
 
-              {/* 재무지표 */}
-              {chartData && (
-                <FinancialMetrics
-                  weinstein={weinstein ?? undefined}
-                  financial={undefined}
-                  signals={signals}
-                />
-              )}
+            {/* 재무지표 */}
+            {chartData && (
+              <FinancialMetrics
+                weinstein={weinstein ?? undefined}
+                financial={undefined}
+                signals={signals}
+              />
+            )}
 
-              {/* API 문서 링크 */}
-              <div className="bg-gray-800 rounded-lg p-4">
-                <h3 className="text-lg font-semibold mb-3">API Documentation</h3>
-                <a
-                  href="http://localhost:8000/docs"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-400 hover:underline"
-                >
-                  Swagger UI
-                </a>
-              </div>
+            {/* API 문서 링크 */}
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h3 className="text-lg font-semibold mb-3">API Documentation</h3>
+              <a
+                href="http://localhost:8000/docs"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-400 hover:underline"
+              >
+                Swagger UI
+              </a>
             </div>
           </div>
+        </div>
 
-        {/* 로딩 상태 */}
+        {/* 최초 로딩 상태 (배경 전체 덮음) */}
         {chartLoading && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-gray-800 rounded-lg p-6">

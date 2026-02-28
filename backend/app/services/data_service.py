@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, delete
 from typing import Optional, List
 from datetime import date, timedelta
 from app.models import Stock, OHLCDaily, OHLCWeekly, FinancialData
@@ -35,38 +35,38 @@ class DataService:
         return stock
 
     async def save_ohlcv_daily(
-        self,
-        db: AsyncSession,
-        stock_id: int,
-        ohlcv_data: List[dict],
-        overwrite: bool = True,  # Default to overwrite existing data
+            self,
+            db: AsyncSession,
+            stock_id: int,
+            ohlcv_data: List[dict],
+            overwrite: bool = False,  # 기본값을 False(Upsert 개념)로 변경
     ) -> int:
-        """Save daily OHLCV data"""
+        if not ohlcv_data:
+            return 0
+
         saved_count = 0
 
-        # If overwrite is True, delete existing data first
+        # 1. overwrite가 True면 강제 갱신이므로 해당 종목의 기존 데이터를 모두 삭제
         if overwrite:
             await db.execute(
-                select(OHLCDaily).where(OHLCDaily.stock_id == stock_id)
+                delete(OHLCDaily).where(OHLCDaily.stock_id == stock_id)
             )
-            logger.info(f"🐤 기존 데이터 삭제 완료 (stock_id: {stock_id})")
+            logger.info(f"🐤 기존 일봉 데이터 삭제 완료 (강제 갱신, stock_id: {stock_id})")
+            existing_dates = set()  # 모두 지웠으므로 빈 Set
 
+        # 2. overwrite가 False면 기존 날짜들을 가져와서 중복 방지 (최적화 로직)
+        else:
+            existing_dates_result = await db.execute(
+                select(OHLCDaily.date).where(OHLCDaily.stock_id == stock_id)
+            )
+            existing_dates = set(existing_dates_result.scalars().all())
+
+        # 3. 데이터 Insert
         for data in ohlcv_data:
-            # Convert ISO string date to date object
             date_obj = date.fromisoformat(data["date"]) if isinstance(data["date"], str) else data["date"]
-            
-            # Check if data already exists (only if not overwriting)
-            result = await db.execute(
-                select(OHLCDaily).where(
-                    and_(
-                        OHLCDaily.stock_id == stock_id,
-                        OHLCDaily.date == date_obj,
-                    )
-                )
-            )
-            existing = result.scalar_one_or_none()
 
-            if not existing or overwrite:
+            # DB에 없는 날짜만 새로 추가 (overwrite일 때는 existing_dates가 비어있으므로 전부 들어감)
+            if date_obj not in existing_dates:
                 ohlcv = OHLCDaily(
                     stock_id=stock_id,
                     date=date_obj,
@@ -79,7 +79,10 @@ class DataService:
                 db.add(ohlcv)
                 saved_count += 1
 
-        await db.commit()
+        # 4. 저장된 건수가 있거나, 삭제(overwrite)가 일어났을 때만 커밋
+        if saved_count > 0 or overwrite:
+            await db.commit()
+
         return saved_count
 
     async def get_ohlcv_daily(
