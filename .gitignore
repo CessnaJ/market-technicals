@@ -205,3 +205,33 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# --- Node.js / React (추가분) ---
+node_modules/
+/frontend/node_modules/  # 폴더 구조에 따라 다를 수 있음
+.eslintcache
+.node_repl_history
+*.js.map
+*.tgz
+
+# React 빌드 결과물
+dist/
+build/
+out/
+
+# 패키지 매니저 로그
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# React 환경 변수
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# macOS 시스템 파일 (협업 시 필수)
+.DS_Store
