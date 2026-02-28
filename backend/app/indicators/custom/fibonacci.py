@@ -57,12 +57,13 @@ class FibonacciRetracement:
             swing_high = lookback_df["high"].max()
             swing_low = lookback_df["low"].min()
 
-        return self.calculate_levels(swing_low, swing_high)
+        return self.calculate_levels(swing_low, swing_high, trend)
 
     def calculate_levels(
         self,
         swing_low: float,
         swing_high: float,
+        trend="UP"
     ) -> Dict[str, Any]:
         """
         Calculate Fibonacci retracement levels
@@ -70,6 +71,7 @@ class FibonacciRetracement:
         Args:
             swing_low: Swing low price
             swing_high: Swing high price
+            trend: 추세?
 
         Returns:
             Dictionary with Fibonacci levels

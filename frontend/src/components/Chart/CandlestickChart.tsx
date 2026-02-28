@@ -149,31 +149,18 @@ export default function CandlestickChart({
   useEffect(() => {
     if (!chartRef.current || !seriesRefs.current.candlestick) return
 
-    // 캔들 데이터 - 시간순으로 정렬 (오래된 것부터 최신 것)
+    // 캔들 데이터 - 시간순으로 정렬 (결측치 필터링 및 숫자 변환 포함)
     const candleData: CandlestickData[] = data
-      .filter(d => {
-        const isValid = d.date &&
-          d.open != null &&
-          d.high != null &&
-          d.low != null &&
-          d.close != null
-        return isValid
-      })
-      .map((d) => {
-        const mapped = {
-          time: new Date(d.date).getTime() / 1000 as Time,
-          open: Number(d.open),
-          high: Number(d.high),
-          low: Number(d.low),
-          close: Number(d.close),
-        }
-        return mapped
-      })
-      .sort((a, b) => {
-        const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
-        const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
-        return timeA - timeB // 오래된 것부터 최신 것 순으로 정렬
-      })
+      .filter(d => d.date && d.open != null && d.high != null && d.low != null && d.close != null)
+      .map((d) => ({
+        time: new Date(d.date).getTime() / 1000 as Time,
+        open: Number(d.open),
+        high: Number(d.high),
+        low: Number(d.low),
+        close: Number(d.close),
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number))
+      
     seriesRefs.current.candlestick.setData(candleData)
 
     // SMA 라인
@@ -200,16 +187,16 @@ export default function CandlestickChart({
       updateFibonacci(chartRef.current, seriesRefs.current, fibonacci.levels)
     }
 
-    // Weinstein 배경색 업데이트
+    // Weinstein 배경색 업데이트 (원시 data가 아닌 정제된 candleData 사용)
     if (showWeinstein && weinstein && seriesRefs.current.weinsteinBackground) {
-      const maValue = weinstein.ma_30w ?? 0
-      const weinsteinData = data.map((d) => ({
-        time: new Date(d.date).getTime() / 1000 as Time,
+      const maValue = Number(weinstein.ma_30w) || 0
+      const weinsteinData = candleData.map((d) => ({
+        time: d.time,
         value: maValue,
       }))
       seriesRefs.current.weinsteinBackground.setData(weinsteinData)
     }
-  },[data, indicators, darvasBoxes, fibonacci, weinstein, showSMA, showBollinger, showDarvas, showFibonacci, showWeinstein])
+  }, [data, indicators, darvasBoxes, fibonacci, weinstein, showSMA, showBollinger, showDarvas, showFibonacci, showWeinstein])
 
   // 스케일 변경
   useEffect(() => {
@@ -262,23 +249,16 @@ function updateSMA(chart: IChartApi, refs: any, period: string, data: IndicatorD
   }
 
   const smaData: LineData[] = data
-    .filter(d => d.value != null)
+    // 수정: null 뿐만 아니라 숫자로 변환 불가능한 값(NaN)도 필터링
+    .filter(d => d.value != null && !isNaN(Number(d.value))) 
     .map((d) => ({
       time: new Date(d.date).getTime() / 1000 as Time,
-      value: d.value,
+      value: Number(d.value), // 수정: 확실한 Number 타입 캐스팅
     }))
-    .sort((a, b) => {
-      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
-      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
-      return timeA - timeB
-    })
+    .sort((a, b) => (a.time as number) - (b.time as number))
 
   const colors: Record<string, string> = {
-    '5': '#f59e0b',
-    '10': '#3b82f6',
-    '20': '#8b5cf6',
-    '60': '#ec4899',
-    '120': '#6b7280',
+    '5': '#f59e0b', '10': '#3b82f6', '20': '#8b5cf6', '60': '#ec4899', '120': '#6b7280',
   }
 
   if (!refs[key]) {
@@ -296,6 +276,8 @@ function updateBollinger(chart: IChartApi, refs: any, data: BollingerData[] | un
   if (!data || data.length === 0) {
     if (refs.bollingerUpper) {
       chart.removeSeries(refs.bollingerUpper)
+      chart.removeSeries(refs.bollingerMiddle)
+      chart.removeSeries(refs.bollingerLower)
       refs.bollingerUpper = undefined
       refs.bollingerMiddle = undefined
       refs.bollingerLower = undefined
@@ -303,134 +285,91 @@ function updateBollinger(chart: IChartApi, refs: any, data: BollingerData[] | un
     return
   }
 
-  const upperData: LineData[] = data
-    .filter(d => d.upper != null)
-    .map((d) => ({
-      time: new Date(d.date).getTime() / 1000 as Time,
-      value: d.upper,
-    }))
-    .sort((a, b) => {
-      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
-      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
-      return timeA - timeB
-    })
-
-  const middleData: LineData[] = data
-    .filter(d => d.middle != null)
-    .map((d) => ({
-      time: new Date(d.date).getTime() / 1000 as Time,
-      value: d.middle,
-    }))
-    .sort((a, b) => {
-      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
-      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
-      return timeA - timeB
-    })
-
-  const lowerData: LineData[] = data
-    .filter(d => d.lower != null)
-    .map((d) => ({
-      time: new Date(d.date).getTime() / 1000 as Time,
-      value: d.lower,
-    }))
-    .sort((a, b) => {
-      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time as string).getTime()
-      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time as string).getTime()
-      return timeA - timeB
-    })
-
+  // 상단, 중단, 하단 모두 Number 캐스팅 및 isNaN 필터링 적용
+  const mapBollinger = (key: keyof BollingerData) => 
+    data
+      .filter(d => d[key] != null && !isNaN(Number(d[key])))
+      .map(d => ({
+        time: new Date(d.date).getTime() / 1000 as Time,
+        value: Number(d[key]),
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number))
 
   if (!refs.bollingerUpper) {
-    refs.bollingerUpper = chart.addLineSeries({
-      color: 'rgba(239, 68, 68, 0.3)',
-      lineWidth: 1,
-      priceLineVisible: false,
-    })
-    refs.bollingerMiddle = chart.addLineSeries({
-      color: 'rgba(156, 163, 175, 0.5)',
-      lineWidth: 1,
-      priceLineVisible: false,
-    })
-    refs.bollingerLower = chart.addLineSeries({
-      color: 'rgba(239, 68, 68, 0.3)',
-      lineWidth: 1,
-      priceLineVisible: false,
-    })
+    refs.bollingerUpper = chart.addLineSeries({ color: 'rgba(239, 68, 68, 0.3)', lineWidth: 1, priceLineVisible: false })
+    refs.bollingerMiddle = chart.addLineSeries({ color: 'rgba(156, 163, 175, 0.5)', lineWidth: 1, priceLineVisible: false })
+    refs.bollingerLower = chart.addLineSeries({ color: 'rgba(239, 68, 68, 0.3)', lineWidth: 1, priceLineVisible: false })
   }
 
-  refs.bollingerUpper.setData(upperData)
-  refs.bollingerMiddle.setData(middleData)
-  refs.bollingerLower.setData(lowerData)
+  refs.bollingerUpper.setData(mapBollinger('upper'))
+  refs.bollingerMiddle.setData(mapBollinger('middle'))
+  refs.bollingerLower.setData(mapBollinger('lower'))
 }
 
 function updateDarvasBoxes(chart: IChartApi, refs: any, boxes: DarvasBox[]) {
-  // 기존 박스 제거
   if (refs.darvasBox) {
-    chart.removeSeries(refs.darvasBox)
+    chart.removeSeries(refs.darvasBox.topLine)
+    chart.removeSeries(refs.darvasBox.bottomLine)
     refs.darvasBox = undefined
   }
 
   if (!boxes || boxes.length === 0) return
 
-  // 활성 박스만 표시
   const activeBox = boxes.find((b) => b.status === 'ACTIVE')
-  if (!activeBox) return
+  // 수정: top, bottom 값 존재 여부 확실히 체크
+  if (!activeBox || activeBox.top == null || activeBox.bottom == null) return
 
-  // 박스 오버레이 (수평선)
-  const topLine = chart.addLineSeries({
-    color: COLORS.darvasBorder,
-    lineWidth: 2,
-    priceLineVisible: false,
-  })
+  const topLine = chart.addLineSeries({ color: COLORS.darvasBorder, lineWidth: 2, priceLineVisible: false })
+  const bottomLine = chart.addLineSeries({ color: COLORS.darvasBorder, lineWidth: 2, priceLineVisible: false })
 
-  const bottomLine = chart.addLineSeries({
-    color: COLORS.darvasBorder,
-    lineWidth: 2,
-    priceLineVisible: false,
-  })
+  let startDate = new Date(activeBox.start_date).getTime() / 1000
+  let endDate = activeBox.end_date ? new Date(activeBox.end_date).getTime() / 1000 : Date.now() / 1000
 
-  const startDate = new Date(activeBox.start_date).getTime() / 1000
-  const endDate = activeBox.end_date ? new Date(activeBox.end_date).getTime() / 1000 : Date.now() / 1000
+  // 수정: 반드시 오름차순 시간 배열이 되도록 방어 코드 추가
+  if (startDate > endDate) {
+    [startDate, endDate] = [endDate, startDate];
+  }
 
   topLine.setData([
-    { time: startDate as Time, value: activeBox.top },
-    { time: endDate as Time, value: activeBox.top },
+    { time: startDate as Time, value: Number(activeBox.top) },
+    { time: endDate as Time, value: Number(activeBox.top) },
   ])
 
   bottomLine.setData([
-    { time: startDate as Time, value: activeBox.bottom },
-    { time: endDate as Time, value: activeBox.bottom },
+    { time: startDate as Time, value: Number(activeBox.bottom) },
+    { time: endDate as Time, value: Number(activeBox.bottom) },
   ])
 
   refs.darvasBox = { topLine, bottomLine }
 }
 
 function updateFibonacci(chart: IChartApi, refs: any, levels: Record<string, number>) {
-  // 기존 라인 제거
   if (refs.fibonacciLines) {
     refs.fibonacciLines.forEach((line: any) => chart.removeSeries(line))
-    refs.fibonacciLines =[]
+    refs.fibonacciLines = []
   }
 
   if (!levels || Object.keys(levels).length === 0) return
 
-  const fibLines = Object.entries(levels).map(([_level, price]) => {
-    const line = chart.addLineSeries({
-      color: COLORS.fibonacciLine,
-      lineWidth: 1,
-      priceLineVisible: false,
-      lineStyle: 2, // dashed
+  const fibLines = Object.entries(levels)
+    .filter(([_level, price]) => price != null && !isNaN(Number(price))) 
+    .map(([_level, price]) => {
+      const line = chart.addLineSeries({
+        color: COLORS.fibonacciLine,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lineStyle: 2, 
+      })
+
+      const now = Date.now() / 1000
+      // 수정: 과거 시간이 인덱스 0, 현재 시간이 인덱스 1에 오도록 배열 순서 교체 (오름차순)
+      line.setData([
+        { time: (now - 86400 * 365) as Time, value: Number(price) },
+        { time: now as Time, value: Number(price) },
+      ])
+
+      return line
     })
-
-    // 전체 범위에 라인 그리기
-    const now = Date.now() / 1000
-    line.setData([
-      { time: now as Time, value: price },
-      { time: (now - 86400 * 365) as Time, value: price },
-    ])
-
-    return line
-  })
 
   refs.fibonacciLines = fibLines
 }
