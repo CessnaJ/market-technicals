@@ -235,3 +235,6 @@ lerna-debug.log*
 
 # macOS 시스템 파일 (협업 시 필수)
 .DS_Store
+
+# 파이참
+.idea/
