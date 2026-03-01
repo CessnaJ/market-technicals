@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional, List
@@ -16,33 +16,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chart", tags=["chart"])
 
 
-@router.get("/{ticker}", response_model=ChartDataResponse)
-async def get_chart_data(
-    ticker: str,
-    timeframe: str = Query("daily", description="Timeframe: daily or weekly"),
-    start_date: Optional[date] = Query(None, description="Start date"),
-    end_date: Optional[date] = Query(None, description="End date"),
-    scale: str = Query("linear", description="Scale: log or linear"),
-    auto_fetch: bool = Query(True, description="Auto fetch data if not found"),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Get chart data for a stock
-
-    Returns OHLCV data with basic indicators
-    If data doesn't exist and auto_fetch is True, automatically fetch data with retry logic
-    """
-    from fastapi import HTTPException, status
+# 백그라운드 태스크용 독립 세션 실행 함수 (중요: Request의 db 세션과 분리해야 함)
+# ==========================================
+# 1. 백그라운드 태스크 함수 (get_db 재활용) -> TODO: from app.core.database import async_session_maker  # 세션 팩토리가 있다고 가정 (경로에 맞게 수정 필요) 이거로 바꿔야되나?
+# ==========================================
+async def background_fetch_full_history(ticker: str, stock_id: int):
     from app.services.kis_api.price import kis_price_service
     from app.services.data_service import data_service
-    import asyncio
+    from app.core.database import get_db
 
-    # Get stock
+    # sessionmaker 이름 찾을 필요 없이 get_db()를 수동 순회하여 안전하게 세션 획득
+    async for db in get_db():
+        try:
+            logger.info(f"🚀 [{ticker}] 백그라운드 1년치 풀데이터 수집 시작...")
+            # 1년치 (365일) 요청
+            full_data = await kis_price_service.get_daily_price(ticker, use_cache=False)
+            if full_data:
+                await data_service.save_ohlcv_daily(db, stock_id, full_data)
+                await data_service.convert_daily_to_weekly(db, stock_id)
+                logger.info(f"✅ [{ticker}] 백그라운드 데이터 수집 및 병합 완료!")
+            break  # 세션 한 번만 쓰고 안전하게 종료
+        except Exception as e:
+            logger.error(f"❌[{ticker}] 백그라운드 수집 에러: {e}")
+            break
+
+
+# ==========================================
+# 2. 차트 조회 엔드포인트
+# ==========================================
+@router.get("/{ticker}", response_model=ChartDataResponse)
+async def get_chart_data(
+        ticker: str,
+        background_tasks: BackgroundTasks,  # 👈 백그라운드 주입
+        timeframe: str = Query("daily", description="Timeframe: daily or weekly"),
+        start_date: Optional[date] = Query(None, description="Start date"),
+        end_date: Optional[date] = Query(None, description="End date"),
+        scale: str = Query("linear", description="Scale: log or linear"),
+        auto_fetch: bool = Query(True, description="Auto fetch data if not found"),
+        force_refresh: bool = Query(False, description="Force refresh from KIS API"),
+        db: AsyncSession = Depends(get_db),
+):
+    from app.services.kis_api.price import kis_price_service
+    from app.services.data_service import data_service
+
+    # 종목 조회
     result = await db.execute(select(Stock).where(Stock.ticker == ticker))
     stock = result.scalar_one_or_none()
 
     if not stock:
-        # Try to get stock info from KIS API
         if auto_fetch:
             current_price = await kis_price_service.get_current_price(ticker)
             if current_price:
@@ -53,25 +74,16 @@ async def get_chart_data(
                     market=current_price.get("market"),
                 )
             else:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Stock {ticker} not found",
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stock {ticker} not found")
         else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Stock {ticker} not found",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stock {ticker} not found")
 
-    # Get OHLCV data
+    # DB에서 데이터 조회
     if timeframe == "weekly":
         result = await db.execute(
-            select(OHLCWeekly)
-            .where(OHLCWeekly.stock_id == stock.id)
-            .order_by(OHLCWeekly.week_start.desc())
+            select(OHLCWeekly).where(OHLCWeekly.stock_id == stock.id).order_by(OHLCWeekly.week_start.desc()).limit(365)
         )
         ohlcv_records = result.scalars().all()
-
         chart_data = [
             ChartDataPoint(
                 date=record.week_start,
@@ -80,17 +92,13 @@ async def get_chart_data(
                 low=float(record.low) if record.low else 0,
                 close=float(record.close) if record.close else 0,
                 volume=int(record.volume) if record.volume else 0,
-            )
-            for record in ohlcv_records
+            ) for record in ohlcv_records
         ]
     else:
         result = await db.execute(
-            select(OHLCDaily)
-            .where(OHLCDaily.stock_id == stock.id)
-            .order_by(OHLCDaily.date.desc())
+            select(OHLCDaily).where(OHLCDaily.stock_id == stock.id).order_by(OHLCDaily.date.desc()).limit(365)
         )
         ohlcv_records = result.scalars().all()
-
         chart_data = [
             ChartDataPoint(
                 date=record.date,
@@ -99,94 +107,48 @@ async def get_chart_data(
                 low=float(record.low) if record.low else 0,
                 close=float(record.close) if record.close else 0,
                 volume=int(record.volume) if record.volume else 0,
-            )
-            for record in ohlcv_records
+            ) for record in ohlcv_records
         ]
 
-    # Auto fetch with retry if no data
-    if not chart_data and auto_fetch:
-        logger.info(f"No OHLCV data found for {ticker}, attempting auto-fetch with retry")
-        
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # Fetch data from KIS API with date parameters
-                ohlcv_api_data = await kis_price_service.get_daily_price(
-                    ticker,
-                    start_date=start_date,
-                    end_date=end_date,
-                    use_cache=False
-                )
-                
-                if ohlcv_api_data:
-                    # Save to database
-                    saved_count = await data_service.save_ohlcv_daily(
-                        db, stock.id, ohlcv_api_data
-                    )
-                    logger.info(f"Auto-fetch saved {saved_count} records for {ticker}")
-                    
-                    # Convert to weekly if needed
-                    if timeframe == "weekly":
-                        await data_service.convert_daily_to_weekly(db, stock.id)
-                    
-                    # Fetch data again
-                    if timeframe == "weekly":
-                        result = await db.execute(
-                            select(OHLCWeekly)
-                            .where(OHLCWeekly.stock_id == stock.id)
-                            .order_by(OHLCWeekly.week_start.desc())
-                        )
-                        ohlcv_records = result.scalars().all()
+    # ==========================================
+    # 3. ★ 핵심: 지연 로딩 (Lazy Loading) 로직 ★
+    # ==========================================
+    # 데이터가 없거나, 100건 미만이거나, 강제 새로고침인 경우
+    if (not chart_data or len(chart_data) < 100 or force_refresh) and auto_fetch:
+        logger.info(f"🐤 [{ticker}] 데이터 부족 - 빠른 100일치 선행 수집 및 백그라운드 1년치 수집 트리거")
 
-                        chart_data = [
-                            ChartDataPoint(
-                                date=record.week_start,
-                                open=record.open,
-                                high=record.high,
-                                low=record.low,
-                                close=record.close,
-                                volume=record.volume,
-                            )
-                            for record in ohlcv_records
-                        ]
-                    else:
-                        result = await db.execute(
-                            select(OHLCDaily)
-                            .where(OHLCDaily.stock_id == stock.id)
-                            .order_by(OHLCDaily.date.desc())
-                        )
-                        ohlcv_records = result.scalars().all()
-
-                        chart_data = [
-                            ChartDataPoint(
-                                date=record.date,
-                                open=record.open,
-                                high=record.high,
-                                low=record.low,
-                                close=record.close,
-                                volume=record.volume,
-                            )
-                            for record in ohlcv_records
-                        ]
-                    
-                    if chart_data:
-                        break  # Success, exit retry loop
-                else:
-                    logger.warning(f"Auto-fetch attempt {attempt + 1}/{max_retries} failed for {ticker}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(1)  # Wait 1 second before retry
-            except Exception as e:
-                logger.error(f"Auto-fetch attempt {attempt + 1}/{max_retries} error for {ticker}: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1)
-
-    if not chart_data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No OHLCV data found for {ticker} after auto-fetch attempts",
+        # 1. 사용자가 덜 기다리게 최신 150일치(약 100거래일)만 빠르게 1번 API 호출
+        quick_start_date = date.today() - timedelta(days=150)
+        recent_data = await kis_price_service.get_daily_price(
+            ticker, start_date=quick_start_date, use_cache=False
         )
 
-    # Calculate basic indicators
+        if recent_data:
+            # 2. 가져온 100일치를 DB에 저장 (force_refresh 시 덮어쓰기)
+            await data_service.save_ohlcv_daily(db, stock.id, recent_data, overwrite=force_refresh)
+            if timeframe == "weekly":
+                await data_service.convert_daily_to_weekly(db, stock.id)
+
+            # 3. ★ 나머지 1년치는 백그라운드로 던져놓고 (여기서 대기 안함) ★
+            background_tasks.add_task(background_fetch_full_history, ticker, stock.id)
+
+            # 4. 방금 가져온 100일치만으로 즉시 응답 데이터 구성
+            chart_data = [
+                ChartDataPoint(
+                    date=date.fromisoformat(r["date"]),
+                    open=r["open"], high=r["high"], low=r["low"], close=r["close"], volume=r["volume"]
+                ) for r in recent_data
+            ]
+        else:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data fetch failed")
+
+    if not chart_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No data for {ticker}")
+
+    # ==========================================
+    # 4. 보조지표 계산 및 리턴
+    # ==========================================
+    chart_data.sort(key=lambda x: x.date)  # 지표 계산을 위해 과거순 정렬 필수
     indicators = await _calculate_basic_indicators(chart_data)
 
     return ChartDataResponse(

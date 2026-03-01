@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events"""
     # Startup
-    logger.info("Starting Technical Analysis Dashboard API...")
+    logger.info("🚀 기술적 분석 대시보드 API 시작 중...")
     await init_db()
-    logger.info("Database initialized")
+    logger.info("🗄️ 데이터베이스 초기화 완료")
     yield
     # Shutdown
-    logger.info("Shutting down...")
+    logger.info("🛑 서버 종료 중...")
     await redis_client.disconnect()
-    logger.info("Redis connection closed")
+    logger.info("🔌 Redis 연결 종료")
 
 
 # Create FastAPI application

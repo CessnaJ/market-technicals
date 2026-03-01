@@ -49,7 +49,8 @@ class WeinsteinAnalysis:
         stage = self._determine_stage(close, ma_30w, ma_slope)
 
         # Calculate stage labels
-        stage_labels = self._get_stage_labels(stage)
+        # stage_labels = self._get_stage_labels(stage) # FIXME: 삭제
+        stage_labels = stage.apply(self._get_stage_labels)
 
         return {
             "ma_30w": ma_30w,

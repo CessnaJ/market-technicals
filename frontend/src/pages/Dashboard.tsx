@@ -2,8 +2,6 @@ import { useState } from 'react'
 import { useChartData } from '../hooks/useChartData'
 import { useIndicators } from '../hooks/useIndicators'
 import CandlestickChart from '../components/Chart/CandlestickChart'
-import VolumePanel from '../components/Chart/VolumePanel'
-import IndicatorPanel from '../components/Chart/IndicatorPanel'
 import FinancialMetrics from '../components/FinancialMetrics'
 import Watchlist from '../components/Watchlist'
 import apiClient from '../api/client'
@@ -18,8 +16,15 @@ export default function Dashboard() {
   const [showDarvas, setShowDarvas] = useState(true)
   const [showFibonacci, setShowFibonacci] = useState(true)
   const [showWeinstein, setShowWeinstein] = useState(true)
+  const [activeIndicator, setActiveIndicator] = useState<'rsi' | 'macd' | 'vpci'>('rsi')
 
-  const { data: chartData, loading: chartLoading, error: chartError } = useChartData({
+  const { 
+    data: chartData, 
+    loading: chartLoading, 
+    isRefetching, 
+    refetch, 
+    error: chartError 
+  } = useChartData({
     ticker,
     timeframe,
     scale,
@@ -31,9 +36,11 @@ export default function Dashboard() {
     enabled: ticker.length > 0,
   })
 
-  const handleFetchData = async () => {
+  const handleForceRefreshData = async () => {
     try {
-      await apiClient.post(`/fetch/${ticker}`)
+      await apiClient.post(`/fetch/${ticker}`, {
+        force_refresh: true
+      })
       window.location.reload()
     } catch (err: any) {
       console.error('Failed to fetch data:', err)
@@ -56,7 +63,7 @@ export default function Dashboard() {
                 className="px-4 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:border-blue-500 focus:outline-none w-48"
               />
               <button
-                onClick={handleFetchData}
+                onClick={handleForceRefreshData}
                 disabled={chartLoading || !ticker}
                 className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -99,7 +106,6 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           {/* 왼쪽: 차트 영역 */}
           <div className="lg:col-span-3 space-y-4">
-            {/* 종목 정보 */}
             {chartData && (
               <div className="bg-gray-800 rounded-lg p-4">
                 <div className="flex justify-between items-center mb-4">
@@ -120,56 +126,48 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                {/* 지표 토글 */}
-                <div className="flex flex-wrap gap-2 mb-4">
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showSMA}
-                      onChange={(e) => setShowSMA(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>SMA</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showBollinger}
-                      onChange={(e) => setShowBollinger(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>Bollinger</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showDarvas}
-                      onChange={(e) => setShowDarvas(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>Darvas Box</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showFibonacci}
-                      onChange={(e) => setShowFibonacci(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>Fibonacci</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showWeinstein}
-                      onChange={(e) => setShowWeinstein(e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span>Weinstein Stage</span>
-                  </label>
+                {/* 지표 토글 & 하단 패널 탭 */}
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                  <div className="flex flex-wrap gap-4">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showSMA} onChange={(e) => setShowSMA(e.target.checked)} className="w-4 h-4"/>
+                      <span>SMA</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showBollinger} onChange={(e) => setShowBollinger(e.target.checked)} className="w-4 h-4"/>
+                      <span>Bollinger</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showDarvas} onChange={(e) => setShowDarvas(e.target.checked)} className="w-4 h-4"/>
+                      <span>Darvas Box</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showFibonacci} onChange={(e) => setShowFibonacci(e.target.checked)} className="w-4 h-4"/>
+                      <span>Fibonacci</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={showWeinstein} onChange={(e) => setShowWeinstein(e.target.checked)} className="w-4 h-4"/>
+                      <span>Weinstein Stage</span>
+                    </label>
+                  </div>
+
+                  {/* 하단 지표 탭 UI */}
+                  <div className="flex gap-2 bg-gray-900 rounded-lg p-1">
+                    {(['rsi', 'macd', 'vpci'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setActiveIndicator(tab)}
+                        className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                          activeIndicator === tab ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        {tab.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                {/* 캔들 차트 */}
+                {/* 통합된 캔들 차트 */}
                 {chartData && (
                   <CandlestickChart
                     data={chartData.ohlcv}
@@ -183,54 +181,41 @@ export default function Dashboard() {
                     showDarvas={showDarvas}
                     showFibonacci={showFibonacci}
                     showWeinstein={showWeinstein}
-                  />
-                )}
-
-                {/* 거래량 패널 */}
-                {chartData && <VolumePanel data={chartData.ohlcv} />}
-
-                {/* 지표 패널 */}
-                {chartData && (
-                  <IndicatorPanel
-                    rsi={chartData.indicators?.rsi}
-                    macd={chartData.indicators?.macd}
-                    vpci={chartData.indicators?.vpci}
+                    activeIndicator={activeIndicator}
+                    onLoadMore={refetch}
+                    isRefetching={isRefetching}
                   />
                 )}
               </div>
             )}
           </div>
 
-            {/* 오른쪽: 사이드 패널 */}
-            <div className="space-y-4">
-              {/* 관심종목 */}
-              <Watchlist />
+          {/* 오른쪽: 사이드 패널 */}
+          <div className="space-y-4">
+            <Watchlist />
 
-              {/* 재무지표 */}
-              {chartData && (
-                <FinancialMetrics
-                  weinstein={weinstein ?? undefined}
-                  financial={undefined}
-                  signals={signals}
-                />
-              )}
+            {chartData && (
+              <FinancialMetrics
+                weinstein={weinstein ?? undefined}
+                financial={undefined}
+                signals={signals}
+              />
+            )}
 
-              {/* API 문서 링크 */}
-              <div className="bg-gray-800 rounded-lg p-4">
-                <h3 className="text-lg font-semibold mb-3">API Documentation</h3>
-                <a
-                  href="http://localhost:8000/docs"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-400 hover:underline"
-                >
-                  Swagger UI
-                </a>
-              </div>
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h3 className="text-lg font-semibold mb-3">API Documentation</h3>
+              <a
+                href="http://localhost:8000/docs"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-400 hover:underline"
+              >
+                Swagger UI
+              </a>
             </div>
           </div>
+        </div>
 
-        {/* 로딩 상태 */}
         {chartLoading && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-gray-800 rounded-lg p-6">
@@ -240,7 +225,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* 에러 상태 */}
         {chartError && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-red-900 rounded-lg p-6">

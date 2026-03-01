@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import date, datetime, timedelta
 from app.services.kis_api.client import kis_client
@@ -13,9 +14,10 @@ class KISPriceService:
 
     # KIS API endpoints
     ENDPOINTS = {
+        # inquire-daily-price FHKST01010400 ->  기간별 주가 조회가 가능한 API로 변경
         "daily_price": {
-            "path": "/uapi/domestic-stock/v1/quotations/inquire-daily-price",
-            "tr_id": "FHKST01010400",
+            "path": "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
+            "tr_id": "FHKST03010100",
         },
         "current_price": {
             "path": "/uapi/domestic-stock/v1/quotations/inquire-price",
@@ -48,7 +50,7 @@ class KISPriceService:
         if use_cache:
             cached_data = await redis_client.get_json(cache_key)
             if cached_data:
-                logger.info(f"Cache hit for {ticker} daily price")
+                logger.info(f"🐤 [{ticker}] 캐시 적중 - 일봉 데이터")
                 return cached_data
 
         # Set default dates (1 year by default)
@@ -57,6 +59,8 @@ class KISPriceService:
         if start_date is None:
             start_date = end_date - timedelta(days=365)
 
+        # FIXME: 삭제
+        """
         # Format dates for KIS API (YYYYMMDD)
         end_date_str = end_date.strftime("%Y%m%d")
         start_date_str = start_date.strftime("%Y%m%d")
@@ -80,7 +84,7 @@ class KISPriceService:
                 headers = {}
                 if tr_cont:
                     headers["tr_cont"] = tr_cont
-                
+                    
                 response = await kis_client.get(
                     endpoint["path"],
                     params=params,
@@ -88,20 +92,24 @@ class KISPriceService:
                     extra_headers=headers if headers else None,
                 )
 
+                logger.info(f"🐤 [{ticker}] KIS API 응답 수신")
+
                 if response and "output" in response:
                     data = response["output"]
                     # Parse and format data
                     ohlcv_data = self._parse_daily_price(data)
                     all_data.extend(ohlcv_data)
+                    logger.info(f"🐤 [{ticker}] {len(ohlcv_data)}건 수집 (누적: {len(all_data)}건)")
                     
                     # Check if there's more data (tr_cont in response header)
                     if response.get("tr_cont"):
                         tr_cont = response["tr_cont"]
-                        logger.info(f"Continuing fetch for {ticker}, tr_cont: {tr_cont}")
+                        logger.info(f"🐤 [{ticker}] 추가 데이터 수집 중...")
                     else:
+                        logger.info(f"🐤 [{ticker}] 모든 데이터 수집 완료")
                         break
                 else:
-                    logger.error(f"Unexpected response for {ticker}: {response}")
+                    logger.error(f"❌ [{ticker}] 예상치 못한 응답: {response}")
                     break
 
             # Cache the result
@@ -115,8 +123,72 @@ class KISPriceService:
             return all_data
 
         except Exception as e:
-            logger.error(f"Error fetching daily price for {ticker}: {e}")
+            logger.error(f"❌ [{ticker}] 일봉 데이터 수집 실패: {e}")
             return None
+        """
+        endpoint = self.ENDPOINTS["daily_price"]
+        all_data = []
+        current_end_date = end_date
+
+        try:
+            # 100거래일 단위로 과거로 거슬러 올라가며 Fetch (Date Shifting)
+            while current_end_date >= start_date:
+                params = {
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": ticker,
+                    "FID_INPUT_DATE_1": start_date.strftime("%Y%m%d"),
+                    "FID_INPUT_DATE_2": current_end_date.strftime("%Y%m%d"),
+                    "FID_PERIOD_DIV_CODE": "D",
+                    "FID_ORG_ADJ_PRC": "1",
+                }
+
+                response = await kis_client.get(
+                    endpoint["path"],
+                    params=params,
+                    tr_id=endpoint["tr_id"],
+                )
+
+                # itemchartprice API는 보통 'output2'에 배열을 반환합니다.
+                if response and "output2" in response:
+                    items = response["output2"]
+                    if not items:
+                        break
+
+                    parsed_chunk = self._parse_daily_price(items)
+                    all_data.extend(parsed_chunk)
+
+                    logger.info(f"🐤[{ticker}] {len(parsed_chunk)}건 수집 (누적: {len(all_data)}건) / ~{current_end_date}")
+
+                    # 가장 오래된 날짜를 찾아 그 전날을 다음 조회 종료일로 설정
+                    oldest_date_str = items[-1].get("stck_bsop_date")
+                    if oldest_date_str:
+                        oldest_date = datetime.strptime(oldest_date_str, "%Y%m%d").date()
+                        new_end_date = oldest_date - timedelta(days=1)
+
+                        # 무한루프 방지
+                        if new_end_date >= current_end_date:
+                            break
+                        current_end_date = new_end_date
+                    else:
+                        break
+
+                    # API Rate Limit (초당 20건 제한 등) 고려하여 약간 대기
+                    await asyncio.sleep(0.1)
+                else:
+                    break
+
+            # 날짜 오름차순 정렬 (과거 -> 최신)
+            all_data.sort(key=lambda x: x["date"])
+
+            if use_cache and all_data:
+                await redis_client.set_json(cache_key, all_data, expire=settings.CACHE_TTL_HISTORICAL)
+
+            return all_data
+
+        except Exception as e:
+            logger.error(f"❌ [{ticker}] 일봉 데이터 수집 실패: {e}")
+            return None
+
 
     def _parse_daily_price(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -136,21 +208,28 @@ class KISPriceService:
             try:
                 # Parse date (YYYYMMDD -> YYYY-MM-DD)
                 date_str = item.get("stck_bsop_date", "")
+                if len(date_str) != 8:
+                    continue
+
+                # FIXME: 삭제
+                """
                 if len(date_str) == 8:
                     parsed_date = datetime.strptime(date_str, "%Y%m%d").date()
                 else:
                     continue
+                """
 
                 parsed_data.append({
-                    "date": parsed_date,
+                    "date": datetime.strptime(date_str, "%Y%m%d").date().isoformat(),
                     "open": float(item.get("stck_oprc", 0)),
                     "high": float(item.get("stck_hgpr", 0)),
                     "low": float(item.get("stck_lwpr", 0)),
                     "close": float(item.get("stck_clpr", 0)),
-                    "volume": int(item.get("stck_vol", 0)),
+                    "volume": int(item.get("acml_vol", 0)), # 주의: itemchartprice API는 stck_vol이 아닌 acml_vol을 씀.
+
                 })
             except (ValueError, KeyError) as e:
-                logger.warning(f"Error parsing price data: {e}")
+                logger.warning(f"⚠️ 가격 데이터 파싱 오류: {e}")
                 continue
 
         # Sort by date ascending
@@ -188,7 +267,7 @@ class KISPriceService:
             )
 
             if response and "output" in response:
-                logger.info(f"KIS API response for {ticker}: {response}")
+                logger.info(f"🐤 [{ticker}] KIS API 응답 수신")
                 output = response["output"]
                 # KIS API returns output as a dict (single object) or array
                 if isinstance(output, dict):
@@ -196,7 +275,7 @@ class KISPriceService:
                 elif isinstance(output, list) and len(output) > 0:
                     data = output[0]
                 else:
-                    logger.error(f"Empty output for {ticker}. Response: {response}")
+                    logger.error(f"❌ [{ticker}] 빈 응답: {response}")
                     return None
                 parsed_data = self._parse_current_price(data)
 
@@ -209,11 +288,11 @@ class KISPriceService:
 
                 return parsed_data
             else:
-                logger.error(f"Unexpected response for {ticker} current price: {response}")
+                logger.error(f"❌ [{ticker}] 현재가 응답 오류: {response}")
                 return None
 
         except Exception as e:
-            logger.error(f"Error fetching current price for {ticker}: {e}")
+            logger.error(f"❌ [{ticker}] 현재가 조회 실패: {e}")
             return None
 
     def _parse_current_price(self, data: Dict[str, Any]) -> Dict[str, Any]:

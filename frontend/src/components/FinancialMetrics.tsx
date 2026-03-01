@@ -75,12 +75,21 @@ export default function FinancialMetrics({ weinstein, financial, signals }: Fina
         </div>
       )}
 
-      {/* Mansfield RS */}
+            {/* Mansfield RS */}
       {weinstein && (
         <div className="flex justify-between items-center">
           <span className="text-gray-400">Mansfield RS:</span>
-          <span className={`font-semibold ${weinstein.mansfield_rs >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-            {weinstein.mansfield_rs >= 0 ? '+' : ''}{weinstein.mansfield_rs.toFixed(2)}
+          {/* 
+             수정 사항:
+             1. toFixed 호출 전 ?. 추가 (null 안전 처리)
+             2. 값이 없을 경우 표시할 fallback UI 추가 (예: '-' 또는 'N/A')
+          */}
+          <span className={`font-semibold ${
+            (weinstein.mansfield_rs ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'
+          }`}>
+            {weinstein.mansfield_rs != null 
+              ? `${weinstein.mansfield_rs >= 0 ? '+' : ''}${weinstein.mansfield_rs.toFixed(2)}` 
+              : '-'}
           </span>
         </div>
       )}
