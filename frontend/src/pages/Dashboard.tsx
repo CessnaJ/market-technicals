@@ -11,6 +11,7 @@ export default function Dashboard() {
   const [ticker, setTicker] = useState('010950')
   const [timeframe, setTimeframe] = useState<'daily' | 'weekly'>('daily')
   const [scale, setScale] = useState<'linear' | 'log'>('linear')
+  
   const [showSMA, setShowSMA] = useState(true)
   const [showBollinger, setShowBollinger] = useState(true)
   const [showDarvas, setShowDarvas] = useState(true)
@@ -25,22 +26,16 @@ export default function Dashboard() {
     refetch, 
     error: chartError 
   } = useChartData({
-    ticker,
-    timeframe,
-    scale,
-    enabled: ticker.length > 0,
+    ticker, timeframe, scale, enabled: ticker.length > 0,
   })
 
   const { weinstein, darvas, fibonacci, signals } = useIndicators({
-    ticker,
-    enabled: ticker.length > 0,
+    ticker, enabled: ticker.length > 0,
   })
 
   const handleForceRefreshData = async () => {
     try {
-      await apiClient.post(`/fetch/${ticker}`, {
-        force_refresh: true
-      })
+      await apiClient.post(`/fetch/${ticker}`, { force_refresh: true })
       window.location.reload()
     } catch (err: any) {
       console.error('Failed to fetch data:', err)
@@ -48,213 +43,168 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* 헤더 */}
-      <header className="bg-gray-800 border-b border-gray-700 p-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          <div className="flex-1 flex items-center gap-4">
-            <h1 className="text-2xl font-bold">Technical Analysis Dashboard</h1>
+    <div className="min-h-screen bg-[#0b0e14] text-gray-100 font-sans">
+      <header className="bg-[#131722] border-b border-gray-800 p-4 sticky top-0 z-30">
+        <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-4">
+          <div className="flex items-center gap-6">
+            <h1 className="text-xl font-black tracking-tighter text-blue-500">QUANT-VIZ Pro</h1>
             <div className="flex items-center gap-2">
               <input
-                type="text"
-                value={ticker}
-                onChange={(e) => setTicker(e.target.value)}
-                placeholder="Ticker (e.g., 010950)"
-                className="px-4 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:border-blue-500 focus:outline-none w-48"
+                type="text" value={ticker} onChange={(e) => setTicker(e.target.value)}
+                className="px-4 py-2 bg-[#1e222d] rounded border border-gray-700 w-48 focus:border-blue-500 outline-none transition-all text-sm font-bold uppercase"
               />
-              <button
-                onClick={handleForceRefreshData}
-                disabled={chartLoading || !ticker}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {chartLoading ? 'Loading...' : 'Fetch Data'}
+              <button onClick={handleForceRefreshData} className="px-4 py-2 bg-blue-600 rounded font-bold text-sm hover:bg-blue-500 transition-colors shadow-lg shadow-blue-900/20">
+                {chartLoading ? 'SYNCING...' : 'FETCH DATA'}
               </button>
             </div>
           </div>
-
-          {/* 타임프레임 & 스케일 */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-400">Timeframe:</label>
-              <select
-                value={timeframe}
-                onChange={(e) => setTimeframe(e.target.value as 'daily' | 'weekly')}
-                className="px-3 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
-              >
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-400">Scale:</label>
-              <select
-                value={scale}
-                onChange={(e) => setScale(e.target.value as 'linear' | 'log')}
-                className="px-3 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
-              >
-                <option value="linear">Linear</option>
-                <option value="log">Log</option>
-              </select>
-            </div>
+          <div className="flex gap-4">
+            <select value={timeframe} onChange={(e) => setTimeframe(e.target.value as any)} className="bg-[#1e222d] p-2 rounded border border-gray-700 text-xs font-bold outline-none">
+              <option value="daily">DAILY</option>
+              <option value="weekly">WEEKLY</option>
+            </select>
+            <select value={scale} onChange={(e) => setScale(e.target.value as any)} className="bg-[#1e222d] p-2 rounded border border-gray-700 text-xs font-bold outline-none">
+              <option value="linear">LINEAR SCALE</option>
+              <option value="log">LOG SCALE</option>
+            </select>
           </div>
         </div>
       </header>
 
-      {/* 메인 컨텐츠 */}
-      <main className="max-w-7xl mx-auto p-4">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          {/* 왼쪽: 차트 영역 */}
-          <div className="lg:col-span-3 space-y-4">
+      <main className="max-w-[1600px] mx-auto p-4">
+        {chartError && (
+          <div className="mb-4 p-4 bg-red-900/30 border border-red-500/50 rounded-lg text-red-400 text-sm flex items-center gap-3">
+            <span className="animate-ping w-2 h-2 bg-red-500 rounded-full"></span>
+            <strong>Engine Error:</strong> {chartError}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          <div className="lg:col-span-3 space-y-6">
             {chartData && (
-              <div className="bg-gray-800 rounded-lg p-4">
-                <div className="flex justify-between items-center mb-4">
-                  <div>
-                    <h2 className="text-xl font-bold">{chartData.ticker}</h2>
-                    <p className="text-gray-400">{chartData.name}</p>
-                  </div>
-                  {weinstein && (
-                    <div className="text-right">
-                      <div className="text-sm text-gray-400">Weinstein Stage</div>
-                      <div
-                        className={`font-semibold px-2 py-1 rounded`}
-                        style={{ backgroundColor: getWeinsteinStageColor(weinstein.current_stage) }}
-                      >
-                        {weinstein.current_stage}
-                      </div>
+              <div className="bg-[#131722] rounded-2xl p-6 border border-gray-800 shadow-2xl transition-all">
+                <div className="flex justify-between items-start mb-8">
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-baseline gap-3">
+                      <h2 className="text-4xl font-black tracking-tight">{chartData.name}</h2>
+                      <span className="text-gray-500 font-mono text-2xl uppercase tracking-widest">{chartData.ticker}</span>
                     </div>
-                  )}
-                </div>
-
-                {/* 지표 토글 & 하단 패널 탭 */}
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                  <div className="flex flex-wrap gap-4">
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showSMA} onChange={(e) => setShowSMA(e.target.checked)} className="w-4 h-4"/>
-                      <span>SMA</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showBollinger} onChange={(e) => setShowBollinger(e.target.checked)} className="w-4 h-4"/>
-                      <span>Bollinger</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showDarvas} onChange={(e) => setShowDarvas(e.target.checked)} className="w-4 h-4"/>
-                      <span>Darvas Box</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showFibonacci} onChange={(e) => setShowFibonacci(e.target.checked)} className="w-4 h-4"/>
-                      <span>Fibonacci</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showWeinstein} onChange={(e) => setShowWeinstein(e.target.checked)} className="w-4 h-4"/>
-                      <span>Weinstein Stage</span>
-                    </label>
+                    {/* ★ TS6133 해결: 여기서 getWeinsteinStageColor 함수를 사용합니다 ★ */}
+                    {weinstein && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <div 
+                          className="px-3 py-0.5 rounded-full text-[10px] font-black text-white" 
+                          style={{ backgroundColor: getWeinsteinStageColor(weinstein.current_stage) }}
+                        >
+                          STAGE {weinstein.current_stage}
+                        </div>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase tracking-tighter">Weinstein Market Cycle</span>
+                      </div>
+                    )}
                   </div>
-
-                  {/* 하단 지표 탭 UI */}
-                  <div className="flex gap-2 bg-gray-900 rounded-lg p-1">
-                    {(['rsi', 'macd', 'vpci'] as const).map((tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => setActiveIndicator(tab)}
-                        className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                          activeIndicator === tab ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
-                        }`}
-                      >
+                  
+                  <div className="flex gap-2 bg-[#0b0e14] p-1.5 rounded-xl border border-gray-800 shadow-inner">
+                    {(['rsi', 'macd', 'vpci'] as const).map(tab => (
+                      <button key={tab} onClick={() => setActiveIndicator(tab)} 
+                        className={`px-5 py-2 rounded-lg text-[11px] font-black tracking-widest transition-all ${activeIndicator === tab ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-gray-500 hover:text-gray-300'}`}>
                         {tab.toUpperCase()}
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* 통합된 캔들 차트 */}
-                {chartData && (
-                  <CandlestickChart
-                    data={chartData.ohlcv}
-                    indicators={chartData.indicators}
-                    darvasBoxes={darvas}
-                    fibonacci={fibonacci ? { levels: fibonacci.levels } : undefined}
-                    weinstein={weinstein ?? undefined}
-                    scale={scale}
-                    showSMA={showSMA}
-                    showBollinger={showBollinger}
-                    showDarvas={showDarvas}
-                    showFibonacci={showFibonacci}
-                    showWeinstein={showWeinstein}
-                    activeIndicator={activeIndicator}
-                    onLoadMore={refetch}
-                    isRefetching={isRefetching}
-                  />
-                )}
+                <div className="flex flex-wrap gap-8 mb-8 px-2">
+                   <label className="flex items-center gap-3 cursor-pointer group">
+                      <input type="checkbox" checked={showSMA} onChange={(e)=>setShowSMA(e.target.checked)} className="hidden"/>
+                      <div className={`w-5 h-5 rounded-md border-2 transition-all flex items-center justify-center ${showSMA ? 'bg-blue-500 border-blue-500':'border-gray-700 group-hover:border-gray-500'}`}>
+                        {showSMA && <span className="text-white text-[10px]">✓</span>}
+                      </div>
+                      <span className={`text-[11px] font-black tracking-widest ${showSMA ? 'text-gray-100':'text-gray-600'}`}>SMA</span>
+                   </label>
+                   <label className="flex items-center gap-3 cursor-pointer group">
+                      <input type="checkbox" checked={showBollinger} onChange={(e)=>setShowBollinger(e.target.checked)} className="hidden"/>
+                      <div className={`w-5 h-5 rounded-md border-2 transition-all flex items-center justify-center ${showBollinger ? 'bg-blue-500 border-blue-500':'border-gray-700 group-hover:border-gray-500'}`}>
+                        {showBollinger && <span className="text-white text-[10px]">✓</span>}
+                      </div>
+                      <span className={`text-[11px] font-black tracking-widest ${showBollinger ? 'text-gray-100':'text-gray-600'}`}>BOLL</span>
+                   </label>
+                   <label className="flex items-center gap-3 cursor-pointer group">
+                      <input type="checkbox" checked={showDarvas} onChange={(e)=>setShowDarvas(e.target.checked)} className="hidden"/>
+                      <div className={`w-5 h-5 rounded-md border-2 transition-all flex items-center justify-center ${showDarvas ? 'bg-blue-500 border-blue-500':'border-gray-700 group-hover:border-gray-500'}`}>
+                        {showDarvas && <span className="text-white text-[10px]">✓</span>}
+                      </div>
+                      <span className={`text-[11px] font-black tracking-widest ${showDarvas ? 'text-gray-100':'text-gray-600'}`}>DARVAS</span>
+                   </label>
+                   <label className="flex items-center gap-3 cursor-pointer group">
+                      <input type="checkbox" checked={showFibonacci} onChange={(e)=>setShowFibonacci(e.target.checked)} className="hidden"/>
+                      <div className={`w-5 h-5 rounded-md border-2 transition-all flex items-center justify-center ${showFibonacci ? 'bg-blue-500 border-blue-500':'border-gray-700 group-hover:border-gray-500'}`}>
+                        {showFibonacci && <span className="text-white text-[10px]">✓</span>}
+                      </div>
+                      <span className={`text-[11px] font-black tracking-widest ${showFibonacci ? 'text-gray-100':'text-gray-600'}`}>FIBO</span>
+                   </label>
+                   <label className="flex items-center gap-3 cursor-pointer group">
+                      <input type="checkbox" checked={showWeinstein} onChange={(e)=>setShowWeinstein(e.target.checked)} className="hidden"/>
+                      <div className={`w-5 h-5 rounded-md border-2 transition-all flex items-center justify-center ${showWeinstein ? 'bg-blue-500 border-blue-500':'border-gray-700 group-hover:border-gray-500'}`}>
+                        {showWeinstein && <span className="text-white text-[10px]">✓</span>}
+                      </div>
+                      <span className={`text-[11px] font-black tracking-widest ${showWeinstein ? 'text-gray-100':'text-gray-600'}`}>STAGE</span>
+                   </label>
+                </div>
+
+                <CandlestickChart
+                  data={chartData.ohlcv}
+                  indicators={chartData.indicators}
+                  darvasBoxes={darvas}
+                  fibonacci={fibonacci ? { levels: fibonacci.levels } : undefined}
+                  weinstein={weinstein ?? undefined}
+                  scale={scale}
+                  showSMA={showSMA}
+                  showBollinger={showBollinger}
+                  showDarvas={showDarvas}
+                  showFibonacci={showFibonacci}
+                  showWeinstein={showWeinstein}
+                  activeIndicator={activeIndicator}
+                  onLoadMore={refetch}
+                  isRefetching={isRefetching}
+                />
               </div>
             )}
           </div>
-
-          {/* 오른쪽: 사이드 패널 */}
-          <div className="space-y-4">
+          
+          <div className="space-y-6">
             <Watchlist />
-
             {chartData && (
-              <FinancialMetrics
-                weinstein={weinstein ?? undefined}
-                financial={undefined}
-                signals={signals}
+              <FinancialMetrics 
+                weinstein={weinstein ?? undefined} 
+                financial={undefined} 
+                signals={signals} 
               />
             )}
-
-            <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-lg font-semibold mb-3">API Documentation</h3>
-              <a
-                href="http://localhost:8000/docs"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-400 hover:underline"
-              >
-                Swagger UI
-              </a>
-            </div>
           </div>
         </div>
-
-        {chartLoading && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-gray-800 rounded-lg p-6">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-t-4 border-blue-500"></div>
-              <p className="mt-4 text-center">Loading chart data...</p>
-            </div>
-          </div>
-        )}
-
-        {chartError && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-red-900 rounded-lg p-6">
-              <p className="text-center text-lg font-semibold mb-2">Error</p>
-              <p className="text-center">{chartError}</p>
-              <button
-                onClick={() => window.location.reload()}
-                className="mt-4 w-full px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        )}
       </main>
+
+      {chartLoading && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-[#1e222d] p-10 rounded-3xl border border-gray-800 flex flex-col items-center shadow-3xl">
+            <div className="relative">
+              <div className="w-16 h-16 border-4 border-blue-500/20 rounded-full"></div>
+              <div className="absolute top-0 left-0 w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+            <p className="mt-6 font-black tracking-[0.2em] text-sm text-blue-500">INITIALIZING ENGINE</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 function getWeinsteinStageColor(stage: number): string {
-  switch (stage) {
-    case 1:
-      return COLORS.stage1
-    case 2:
-      return COLORS.stage2
-    case 3:
-      return COLORS.stage3
-    case 4:
-      return COLORS.stage4
-    default:
-      return 'transparent'
+  const colors: Record<number, string> = { 
+    1: COLORS.stage1, 
+    2: COLORS.stage2, 
+    3: COLORS.stage3, 
+    4: COLORS.stage4 
   }
+  return colors[stage] || '#374151'
 }

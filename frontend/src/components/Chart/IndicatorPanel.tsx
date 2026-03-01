@@ -1,174 +1,112 @@
-import { useState } from 'react'
-import { IndicatorData, MACDData, VPCIData, COLORS } from '../../types'
+import { useEffect, useRef } from 'react'
+import { createChart, IChartApi, ColorType, Time, ISeriesApi } from 'lightweight-charts'
+import { COLORS, IndicatorData } from '../../types'
 
 interface IndicatorPanelProps {
-  rsi?: IndicatorData[]
-  macd?: MACDData[]
-  vpci?: VPCIData[]
+  rsi?: IndicatorData[];
+  macd?: any[]; // MACDData
+  vpci?: any[]; // VPCIData
+  activeIndicator: 'rsi' | 'macd' | 'vpci';
 }
 
-export default function IndicatorPanel({ rsi, macd, vpci }: IndicatorPanelProps) {
-  const [activeTab, setActiveTab] = useState<'rsi' | 'macd' | 'vpci'>('rsi')
+export default function IndicatorPanel({ rsi, macd, vpci, activeIndicator }: IndicatorPanelProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const seriesRefs = useRef<ISeriesApi<any>[]>([])
+
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const chart = createChart(containerRef.current, {
+      width: containerRef.current.clientWidth,
+      height: 180,
+      layout: {
+        background: { type: ColorType.Solid, color: COLORS.background },
+        textColor: COLORS.text,
+      },
+      grid: {
+        vertLines: { color: '#1f2937' },
+        horzLines: { color: '#1f2937' },
+      },
+      timeScale: {
+        borderColor: '#1f2937',
+        timeVisible: true,
+      },
+    })
+
+    chartRef.current = chart
+
+    const handleResize = () => {
+      if (containerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({ width: containerRef.current.clientWidth })
+      }
+    }
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      chart.remove()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!chartRef.current) return
+
+    // 기존 시리즈 제거
+    seriesRefs.current.forEach(s => chartRef.current?.removeSeries(s))
+    seriesRefs.current = []
+
+    if (activeIndicator === 'rsi' && rsi) {
+      const s = chartRef.current.addLineSeries({ color: '#8b5cf6', lineWidth: 2, title: 'RSI' })
+      const data = rsi
+        .map(d => ({ time: (new Date(d.date).getTime() / 1000) as Time, value: Number(d.value) }))
+        .filter(d => !isNaN(d.value))
+        .sort((a, b) => (a.time as number) - (b.time as number))
+      
+      s.setData(data)
+      s.createPriceLine({ price: 70, color: '#ef4444', lineStyle: 2, axisLabelVisible: true, title: '70' })
+      s.createPriceLine({ price: 30, color: '#22c55e', lineStyle: 2, axisLabelVisible: true, title: '30' })
+      seriesRefs.current.push(s)
+    } 
+    
+    else if (activeIndicator === 'macd' && macd) {
+      const hist = chartRef.current.addHistogramSeries({ title: 'Histogram' })
+      const line = chartRef.current.addLineSeries({ color: '#3b82f6', lineWidth: 2, title: 'MACD' })
+      const signal = chartRef.current.addLineSeries({ color: '#f59e0b', lineWidth: 2, title: 'Signal' })
+
+      const data = macd
+        .map(d => ({
+          time: (new Date(d.date).getTime() / 1000) as Time,
+          macd: Number(d.macd || d.value),
+          sig: Number(d.signal),
+          h: Number(d.histogram)
+        }))
+        .filter(d => !isNaN(d.macd))
+        .sort((a, b) => (a.time as number) - (b.time as number))
+
+      hist.setData(data.map(d => ({ time: d.time, value: d.h, color: d.h >= 0 ? 'rgba(34, 197, 94, 0.5)' : 'rgba(239, 68, 68, 0.5)' })))
+      line.setData(data.map(d => ({ time: d.time, value: d.macd })))
+      signal.setData(data.map(d => ({ time: d.time, value: d.sig })))
+      seriesRefs.current.push(hist, line, signal)
+    }
+
+    else if (activeIndicator === 'vpci' && vpci) {
+      const s = chartRef.current.addLineSeries({ color: '#f8fafc', lineWidth: 2, title: 'VPCI' })
+      const data = vpci
+        .map(d => ({ time: (new Date(d.date).getTime() / 1000) as Time, value: Number(d.value) }))
+        .filter(d => !isNaN(d.value))
+        .sort((a, b) => (a.time as number) - (b.time as number))
+      
+      s.setData(data)
+      seriesRefs.current.push(s)
+    }
+
+  }, [activeIndicator, rsi, macd, vpci])
 
   return (
-    <div className="w-full bg-gray-800 rounded-lg p-4">
-      {/* 탭 버튼 */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => setActiveTab('rsi')}
-          className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-            activeTab === 'rsi'
-              ? 'bg-blue-600 text-white'
-              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-          }`}
-        >
-          RSI
-        </button>
-        <button
-          onClick={() => setActiveTab('macd')}
-          className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-            activeTab === 'macd'
-              ? 'bg-blue-600 text-white'
-              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-          }`}
-        >
-          MACD
-        </button>
-        <button
-          onClick={() => setActiveTab('vpci')}
-          className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-            activeTab === 'vpci'
-              ? 'bg-blue-600 text-white'
-              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-          }`}
-        >
-          VPCI
-        </button>
-      </div>
-
-      {/* RSI 패널 */}
-      {activeTab === 'rsi' && rsi && rsi.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex justify-between text-sm">
-            <span className="text-gray-400">RSI (14)</span>
-            <div className="flex gap-4">
-              <span className="text-green-500">Overbought: {'>'} 70</span>
-              <span className="text-red-500">Oversold: {'<'} 30</span>
-            </div>
-          </div>
-          <div className="h-32 bg-gray-900 rounded p-2">
-            <svg viewBox="0 0 400 100" className="w-full h-full">
-              {/* RSI 라인 */}
-              <polyline
-                points={rsi.map((d, i) => `${i * (400 / (rsi.length - 1))},${100 - d.value}`).join(' ')}
-                fill="none"
-                stroke={COLORS.text}
-                strokeWidth="2"
-              />
-              {/* 기준선 */}
-              <line x1="0" y1="30" x2="400" y2="30" stroke="#4b5563" strokeWidth="1" strokeDasharray="4" />
-              <line x1="0" y1="70" x2="400" y2="70" stroke="#22c55e" strokeWidth="1" strokeDasharray="4" />
-              <line x1="0" y1="0" x2="400" y2="0" stroke="#ef4444" strokeWidth="1" strokeDasharray="4" />
-            </svg>
-          </div>
-        </div>
-      )}
-
-      {/* MACD 패널 */}
-      {activeTab === 'macd' && macd && macd.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-sm text-gray-400">MACD (12, 26, 9)</div>
-          <div className="h-32 bg-gray-900 rounded p-2">
-            <svg viewBox="0 0 400 100" className="w-full h-full">
-              {/* MACD 라인 */}
-              <polyline
-                points={macd.map((d, i) => `${i * (400 / (macd.length - 1))},${50 - d.value}`).join(' ')}
-                fill="none"
-                stroke={COLORS.bullish}
-                strokeWidth="2"
-              />
-              {/* Signal 라인 */}
-              <polyline
-                points={macd.map((d, i) => `${i * (400 / (macd.length - 1))},${50 - d.signal}`).join(' ')}
-                fill="none"
-                stroke="#f59e0b"
-                strokeWidth="1"
-              />
-              {/* 히스토그램 */}
-              {macd.map((d, i) => {
-                const x = i * (400 / (macd.length - 1))
-                const y = 50
-                const height = d.histogram * 20
-                return (
-                  <rect
-                    key={i}
-                    x={x}
-                    y={height >= 0 ? y - height : y}
-                    width={400 / (macd.length - 1) - 1}
-                    height={Math.abs(height)}
-                    fill={d.histogram >= 0 ? COLORS.bullish : COLORS.bearish}
-                    opacity="0.7"
-                  />
-                )
-              })}
-              {/* 기준선 */}
-              <line x1="0" y1="50" x2="400" y2="50" stroke="#4b5563" strokeWidth="1" />
-            </svg>
-          </div>
-        </div>
-      )}
-
-      {/* VPCI 패널 */}
-      {activeTab === 'vpci' && vpci && vpci.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-sm text-gray-400">VPCI (Volume Price Confirmation Indicator)</div>
-          <div className="h-32 bg-gray-900 rounded p-2">
-            <svg viewBox="0 0 400 100" className="w-full h-full">
-              {/* VPCI 라인 */}
-              <polyline
-                points={vpci.map((d, i) => `${i * (400 / (vpci.length - 1))},${50 - d.value}`).join(' ')}
-                fill="none"
-                stroke={COLORS.text}
-                strokeWidth="2"
-              />
-              {/* 기준선 */}
-              <line x1="0" y1="50" x2="400" y2="50" stroke="#4b5563" strokeWidth="1" strokeDasharray="4" />
-              {/* 다이버전스 마커 */}
-              {vpci.map((d, i) => {
-                if (d.signal.includes('DIVERGE')) {
-                  const x = i * (400 / (vpci.length - 1))
-                  const y = 50 - d.value
-                  const isBearish = d.signal === 'DIVERGE_BEAR'
-                  return (
-                    <circle
-                      key={i}
-                      cx={x}
-                      cy={y}
-                      r="4"
-                      fill={isBearish ? '#ef4444' : '#22c55e'}
-                    />
-                  )
-                }
-                return null
-              })}
-              {/* 기준선 */}
-              <line x1="0" y1="50" x2="400" y2="50" stroke="#4b5563" strokeWidth="1" strokeDasharray="4" />
-            </svg>
-          </div>
-          <div className="text-xs text-gray-400 mt-2">
-            <div className="flex gap-4">
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                <span>Confirm Bull/Bear</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 bg-red-500 rounded-full"></span>
-                <span>Diverge (False Signal)</span>
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
+    <div className="mt-4 pt-4 border-t border-gray-700">
+      <div className="text-[10px] font-bold text-gray-500 uppercase ml-2 mb-2">{activeIndicator} Indicator</div>
+      <div ref={containerRef} className="w-full" />
     </div>
   )
 }

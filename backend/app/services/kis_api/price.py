@@ -206,18 +206,13 @@ class KISPriceService:
 
         for item in data:
             try:
-                # Parse date (YYYYMMDD -> YYYY-MM-DD)
                 date_str = item.get("stck_bsop_date", "")
                 if len(date_str) != 8:
                     continue
 
-                # FIXME: 삭제
-                """
-                if len(date_str) == 8:
-                    parsed_date = datetime.strptime(date_str, "%Y%m%d").date()
-                else:
-                    continue
-                """
+                # 핵심 수정: itemchartprice(FHKST03010100)는 'acml_vol'을 사용합니다.
+                # 혹시 모르니 여러 필드를 체크하도록 방어 로직 추가
+                volume_val = item.get("acml_vol") or item.get("stck_vol") or 0
 
                 parsed_data.append({
                     "date": datetime.strptime(date_str, "%Y%m%d").date().isoformat(),
@@ -225,15 +220,13 @@ class KISPriceService:
                     "high": float(item.get("stck_hgpr", 0)),
                     "low": float(item.get("stck_lwpr", 0)),
                     "close": float(item.get("stck_clpr", 0)),
-                    "volume": int(item.get("acml_vol", 0)), # 주의: itemchartprice API는 stck_vol이 아닌 acml_vol을 씀.
-
+                    "volume": int(volume_val),
                 })
             except (ValueError, KeyError) as e:
                 logger.warning(f"⚠️ 가격 데이터 파싱 오류: {e}")
                 continue
 
-        # Sort by date ascending
-        parsed_data.sort(key=lambda x: x["date"])
+        # 내부 정렬은 제거하고 호출하는 쪽에서 마지막에 한 번만 수행하도록 하는 것이 안전합니다.
         return parsed_data
 
     async def get_current_price(self, ticker: str) -> Optional[Dict[str, Any]]:
