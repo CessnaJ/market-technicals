@@ -7,6 +7,8 @@ interface UseRelativeStrengthParams {
   ticker: string
   benchmarkTicker: string
   timeframe: 'daily' | 'weekly' | 'monthly'
+  startDate?: string
+  endDate?: string
   enabled?: boolean
 }
 
@@ -14,6 +16,8 @@ export function useRelativeStrength({
   ticker,
   benchmarkTicker,
   timeframe,
+  startDate,
+  endDate,
   enabled = true,
 }: UseRelativeStrengthParams) {
   const [relativeStrength, setRelativeStrength] = useState<RelativeStrengthData | null>(null)
@@ -35,6 +39,8 @@ export function useRelativeStrength({
         benchmark_ticker: benchmarkTicker,
         timeframe,
       })
+      if (startDate) params.append('start_date', startDate)
+      if (endDate) params.append('end_date', endDate)
       const response = await apiClient.get<{ relative_strength: RelativeStrengthData | null }>(
         `/indicators/${ticker}/relative-strength?${params.toString()}`
       )
@@ -47,7 +53,7 @@ export function useRelativeStrength({
     } finally {
       setLoading(false)
     }
-  }, [benchmarkTicker, enabled, ticker, timeframe])
+  }, [benchmarkTicker, enabled, endDate, startDate, ticker, timeframe])
 
   useEffect(() => {
     if (!enabled || !ticker || !benchmarkTicker) {
@@ -57,7 +63,7 @@ export function useRelativeStrength({
     }
 
     void fetchRelativeStrength()
-  }, [benchmarkTicker, enabled, ticker, timeframe, fetchRelativeStrength])
+  }, [benchmarkTicker, enabled, endDate, startDate, ticker, timeframe, fetchRelativeStrength])
 
   return { relativeStrength, loading, error, refetch: fetchRelativeStrength }
 }

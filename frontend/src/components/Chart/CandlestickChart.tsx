@@ -14,12 +14,14 @@ import {
 
 import {
   BollingerData,
+  ChartHoverSnapshot,
   COLORS,
   DarvasBox,
   FibonacciData,
   IndicatorData,
   OHLCV,
   RelativeStrengthData,
+  SmaConfig,
   WeinsteinData,
 } from '../../types'
 
@@ -37,50 +39,19 @@ interface CandlestickChartProps {
   weinstein?: WeinsteinData
   relativeStrength?: RelativeStrengthData | null
   scale: 'linear' | 'log'
+  smaConfigs: SmaConfig[]
+  headerCollapsed: boolean
+  onToggleHeaderCollapsed: () => void
+  onSmaConfigsChange: (configs: SmaConfig[]) => void
   showSMA: boolean
   showBollinger: boolean
   showDarvas: boolean
   showFibonacci: boolean
   showWeinstein: boolean
   activeIndicator: 'rsi' | 'macd' | 'vpci' | 'rs'
-}
-
-interface HoverSnapshot {
-  date: string
-  open: number
-  high: number
-  low: number
-  close: number
-  volume: number
-  changePct: number | null
-  sma: Record<string, number | null>
-  bollinger?: {
-    upper: number | null
-    middle: number | null
-    lower: number | null
-  }
-  rsi?: number | null
-  macd?: {
-    value: number | null
-    signal: number | null
-    histogram: number | null
-  }
-  vpci?: {
-    value: number | null
-    signal?: string
-  }
-  stage?: {
-    stage: number
-    label: string
-    ma30w: number | null
-    mansfield: number | null
-  } | null
-  rs?: {
-    stock: number
-    benchmark: number
-    ratio: number
-    mansfield: number | null
-  } | null
+  onLoadOlder: () => Promise<number>
+  isFetchingOlder: boolean
+  hasMoreBefore: boolean
 }
 
 type StageOverlayPoint = {
@@ -91,7 +62,24 @@ type StageOverlayPoint = {
   mansfield: number | null
 }
 
-const SMA_COLOR_PALETTE = ['#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#10b981', '#f43f5e']
+type TooltipState = {
+  visible: boolean
+  x: number
+  y: number
+  dateKey: string | null
+}
+
+const MAX_SMA_LINES = 6
+const AUTO_LOAD_THRESHOLD = 10
+const AUTO_LOAD_DEBOUNCE_MS = 350
+const RIGHT_SCALE_MIN_WIDTH = 84
+const DEFAULT_SMA_COLORS = ['#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#10b981', '#f43f5e']
+const STAGE_LEGEND = [
+  { stage: 1, label: 'Accumulation' },
+  { stage: 2, label: 'Markup' },
+  { stage: 3, label: 'Distribution' },
+  { stage: 4, label: 'Markdown' },
+]
 
 export default function CandlestickChart({
   data,
@@ -101,29 +89,68 @@ export default function CandlestickChart({
   weinstein,
   relativeStrength,
   scale,
+  smaConfigs,
+  headerCollapsed,
+  onToggleHeaderCollapsed,
+  onSmaConfigsChange,
   showSMA,
   showBollinger,
   showDarvas,
   showFibonacci,
   showWeinstein,
   activeIndicator,
+  onLoadOlder,
+  isFetchingOlder,
+  hasMoreBefore,
 }: CandlestickChartProps) {
-  const mainContainerRef = useRef<HTMLDivElement>(null)
+  const priceContainerRef = useRef<HTMLDivElement>(null)
+  const stageContainerRef = useRef<HTMLDivElement>(null)
+  const volumeContainerRef = useRef<HTMLDivElement>(null)
   const indicatorContainerRef = useRef<HTMLDivElement>(null)
-  const mainChartRef = useRef<IChartApi | null>(null)
+
+  const priceChartRef = useRef<IChartApi | null>(null)
+  const stageChartRef = useRef<IChartApi | null>(null)
+  const volumeChartRef = useRef<IChartApi | null>(null)
   const indicatorChartRef = useRef<IChartApi | null>(null)
 
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const stageSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const stageTimelineSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const smaSeriesRefs = useRef<Record<string, ISeriesApi<'Line'>>>({})
   const bollingerSeriesRefs = useRef<ISeriesApi<'Line'>[]>([])
   const darvasSeriesRefs = useRef<ISeriesApi<'Line'>[]>([])
   const fibonacciSeriesRefs = useRef<ISeriesApi<'Line'>[]>([])
   const weinsteinMaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const stageStripSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const bottomSeriesRefs = useRef<ISeriesApi<any>[]>([])
-  const [hoveredDateKey, setHoveredDateKey] = useState<string | null>(null)
+  const latestVisibleRangeRef = useRef<LogicalRange | null>(null)
+  const pendingPrependRangeRef = useRef<LogicalRange | null>(null)
+  const previousWindowRef = useRef<{ oldest: string | null; newest: string | null; length: number }>({
+    oldest: null,
+    newest: null,
+    length: 0,
+  })
+  const programmaticRangeChangeRef = useRef(false)
+  const lastOlderLoadAtRef = useRef(0)
+  const olderBoundaryInFlightRef = useRef<string | null>(null)
+  const onLoadOlderRef = useRef(onLoadOlder)
+  const isFetchingOlderRef = useRef(isFetchingOlder)
+  const hasMoreBeforeRef = useRef(hasMoreBefore)
 
+  const [tooltipState, setTooltipState] = useState<TooltipState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    dateKey: null,
+  })
+  const [isSmaSettingsOpen, setIsSmaSettingsOpen] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+
+  const paneHeights = useMemo(() => getPaneHeights(isMobile), [isMobile])
+  const orderedSmaConfigs = useMemo(
+    () => [...smaConfigs].sort((left, right) => left.period - right.period),
+    [smaConfigs]
+  )
   const stageOverlay = useMemo(
     () => buildStageOverlayData(data, weinstein?.stage_history ?? []),
     [data, weinstein?.stage_history]
@@ -132,65 +159,129 @@ export default function CandlestickChart({
     () => buildHoverLookup(data, indicators, stageOverlay, relativeStrength),
     [data, indicators, relativeStrength, stageOverlay]
   )
-  const latestKey = useMemo(() => (data.length > 0 ? data[data.length - 1].date : null), [data])
-  const activeSnapshot = useMemo(
-    () => (hoveredDateKey && hoverLookup[hoveredDateKey]) || (latestKey ? hoverLookup[latestKey] : null),
-    [hoverLookup, hoveredDateKey, latestKey]
-  )
-
-  const priceChangePct =
-    data.length > 1 && data[data.length - 2].close !== 0
-      ? ((data[data.length - 1].close - data[data.length - 2].close) / data[data.length - 2].close) * 100
-      : null
-  const headlineChange = hoveredDateKey ? activeSnapshot?.changePct ?? null : priceChangePct
+  const latestKey = data.length > 0 ? data[data.length - 1].date : null
+  const latestSnapshot = latestKey ? hoverLookup[latestKey] ?? null : null
+  const tooltipSnapshot = tooltipState.dateKey ? hoverLookup[tooltipState.dateKey] ?? null : null
+  const legendSnapshot = tooltipSnapshot ?? latestSnapshot
+  const visibleSmaConfigs = orderedSmaConfigs.filter((config) => config.visible)
+  const activeSmaCount = showSMA ? visibleSmaConfigs.length : 0
 
   useEffect(() => {
-    if (!mainContainerRef.current || !indicatorContainerRef.current) {
+    onLoadOlderRef.current = onLoadOlder
+  }, [onLoadOlder])
+
+  useEffect(() => {
+    isFetchingOlderRef.current = isFetchingOlder
+  }, [isFetchingOlder])
+
+  useEffect(() => {
+    hasMoreBeforeRef.current = hasMoreBefore
+  }, [hasMoreBefore])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 768px)')
+    const syncMediaState = () => setIsMobile(mediaQuery.matches)
+    syncMediaState()
+    mediaQuery.addEventListener('change', syncMediaState)
+    return () => mediaQuery.removeEventListener('change', syncMediaState)
+  }, [])
+
+  useEffect(() => {
+    if (!priceContainerRef.current || !stageContainerRef.current || !volumeContainerRef.current || !indicatorContainerRef.current) {
       return
     }
 
-    const mainChart = createChart(mainContainerRef.current, {
-      width: mainContainerRef.current.clientWidth,
-      height: 450,
-      layout: { background: { type: ColorType.Solid, color: COLORS.background }, textColor: COLORS.text },
-      grid: { vertLines: { color: '#1f2937' }, horzLines: { color: '#1f2937' } },
+    const sharedLayout = {
+      background: { type: ColorType.Solid as const, color: COLORS.background },
+      textColor: COLORS.text,
+    }
+    const sharedGrid = {
+      vertLines: { color: '#1f2937' },
+      horzLines: { color: '#1f2937' },
+    }
+    const width = priceContainerRef.current.clientWidth
+
+    const priceChart = createChart(priceContainerRef.current, {
+      width,
+      height: paneHeights.price,
+      layout: sharedLayout,
+      grid: sharedGrid,
       crosshair: { mode: 1 },
       rightPriceScale: {
         mode: scale === 'log' ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
         borderColor: '#1f2937',
+        minimumWidth: RIGHT_SCALE_MIN_WIDTH,
       },
-      timeScale: { borderColor: '#1f2937', timeVisible: true, rightOffset: 5 },
+      timeScale: {
+        visible: false,
+        borderColor: '#1f2937',
+        timeVisible: true,
+        rightOffset: 5,
+      },
+    })
+
+    const stageChart = createChart(stageContainerRef.current, {
+      width,
+      height: paneHeights.stage,
+      layout: sharedLayout,
+      grid: {
+        vertLines: { color: 'transparent' },
+        horzLines: { color: 'transparent' },
+      },
+      crosshair: { vertLine: { visible: false }, horzLine: { visible: false } },
+      rightPriceScale: {
+        visible: true,
+        minimumWidth: RIGHT_SCALE_MIN_WIDTH,
+        ticksVisible: false,
+        borderColor: 'transparent',
+        textColor: 'rgba(17, 24, 39, 0)',
+      },
+      leftPriceScale: { visible: false },
+      timeScale: {
+        visible: false,
+        borderColor: '#1f2937',
+        timeVisible: true,
+      },
+    })
+
+    const volumeChart = createChart(volumeContainerRef.current, {
+      width,
+      height: paneHeights.volume,
+      layout: sharedLayout,
+      grid: sharedGrid,
+      rightPriceScale: {
+        borderColor: '#1f2937',
+        minimumWidth: RIGHT_SCALE_MIN_WIDTH,
+      },
+      timeScale: {
+        visible: false,
+        borderColor: '#1f2937',
+        timeVisible: true,
+      },
     })
 
     const indicatorChart = createChart(indicatorContainerRef.current, {
-      width: indicatorContainerRef.current.clientWidth,
-      height: 180,
-      layout: { background: { type: ColorType.Solid, color: COLORS.background }, textColor: COLORS.text },
-      grid: { vertLines: { color: '#1f2937' }, horzLines: { color: '#1f2937' } },
-      timeScale: { borderColor: '#1f2937', timeVisible: true },
-      rightPriceScale: { borderColor: '#1f2937' },
+      width,
+      height: paneHeights.indicator,
+      layout: sharedLayout,
+      grid: sharedGrid,
+      rightPriceScale: {
+        borderColor: '#1f2937',
+        minimumWidth: RIGHT_SCALE_MIN_WIDTH,
+      },
+      timeScale: {
+        visible: true,
+        borderColor: '#1f2937',
+        timeVisible: true,
+      },
     })
 
-    mainChartRef.current = mainChart
+    priceChartRef.current = priceChart
+    stageChartRef.current = stageChart
+    volumeChartRef.current = volumeChart
     indicatorChartRef.current = indicatorChart
 
-    let isSyncing = false
-    const mainTimeScale = mainChart.timeScale()
-    const indicatorTimeScale = indicatorChart.timeScale()
-
-    const syncHandler = (target: any) => (range: LogicalRange | null) => {
-      if (isSyncing || !range) {
-        return
-      }
-      isSyncing = true
-      target.setVisibleLogicalRange(range)
-      isSyncing = false
-    }
-
-    mainTimeScale.subscribeVisibleLogicalRangeChange(syncHandler(indicatorTimeScale))
-    indicatorTimeScale.subscribeVisibleLogicalRangeChange(syncHandler(mainTimeScale))
-
-    candlestickSeriesRef.current = mainChart.addCandlestickSeries({
+    candlestickSeriesRef.current = priceChart.addCandlestickSeries({
       upColor: COLORS.candleUp,
       downColor: COLORS.candleDown,
       borderUpColor: COLORS.candleUp,
@@ -199,33 +290,153 @@ export default function CandlestickChart({
       wickDownColor: COLORS.candleDown,
     })
 
-    volumeSeriesRef.current = mainChart.addHistogramSeries({
-      priceScaleId: 'volume',
+    stageSeriesRef.current = stageChart.addHistogramSeries({
+      priceScaleId: 'stage-strip',
       priceFormat: { type: 'volume' },
       priceLineVisible: false,
       lastValueVisible: false,
     })
 
-    mainChart.priceScale('volume').applyOptions({
-      scaleMargins: { top: 0.78, bottom: 0.12 },
-      visible: false,
+    volumeSeriesRef.current = volumeChart.addHistogramSeries({
+      priceScaleId: 'volume',
+      priceFormat: { type: 'volume' },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    })
+    stageTimelineSeriesRef.current = stageChart.addLineSeries({
+      color: 'rgba(0,0,0,0)',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    })
+
+    volumeChart.priceScale('volume').applyOptions({
+      scaleMargins: { top: 0.08, bottom: 0.02 },
+      visible: true,
+      minimumWidth: RIGHT_SCALE_MIN_WIDTH,
+    })
+    stageChart.priceScale('stage-strip').applyOptions({
+      scaleMargins: { top: 0.05, bottom: 0.05 },
+      visible: true,
+      minimumWidth: RIGHT_SCALE_MIN_WIDTH,
+      ticksVisible: false,
+      borderColor: 'transparent',
+      textColor: 'rgba(17, 24, 39, 0)',
+    })
+
+    const charts = [priceChart, stageChart, volumeChart, indicatorChart]
+    let isSyncing = false
+    const syncChartsToRange = (range: LogicalRange) => {
+      latestVisibleRangeRef.current = range
+      charts.forEach((targetChart) => {
+        targetChart.timeScale().setVisibleLogicalRange(range)
+      })
+    }
+    const maybeLoadOlder = async (range: LogicalRange) => {
+      const currentOldest = previousWindowRef.current.oldest
+      if (
+        !currentOldest ||
+        !hasMoreBeforeRef.current ||
+        isFetchingOlderRef.current ||
+        olderBoundaryInFlightRef.current === currentOldest
+      ) {
+        return
+      }
+
+      const now = Date.now()
+      if (now - lastOlderLoadAtRef.current < AUTO_LOAD_DEBOUNCE_MS) {
+        return
+      }
+
+      lastOlderLoadAtRef.current = now
+      olderBoundaryInFlightRef.current = currentOldest
+      pendingPrependRangeRef.current = range
+
+      try {
+        const addedCount = await onLoadOlderRef.current()
+        if (addedCount <= 0) {
+          pendingPrependRangeRef.current = null
+        }
+      } finally {
+        if (previousWindowRef.current.oldest === currentOldest) {
+          olderBoundaryInFlightRef.current = null
+        }
+      }
+    }
+    const subscriptions = charts.map((chart, index) => {
+      const handler = (range: LogicalRange | null) => {
+        if (isSyncing || !range) {
+          return
+        }
+        isSyncing = true
+        syncChartsToRange(range)
+        isSyncing = false
+
+        if (index === 0 && programmaticRangeChangeRef.current) {
+          programmaticRangeChangeRef.current = false
+          return
+        }
+
+        if (range.from <= AUTO_LOAD_THRESHOLD) {
+          void maybeLoadOlder(range)
+        }
+      }
+      chart.timeScale().subscribeVisibleLogicalRangeChange(handler)
+      return { chart, handler }
     })
 
     return () => {
-      mainChart.remove()
+      subscriptions.forEach(({ chart, handler }) => {
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(handler)
+      })
+      priceChart.remove()
+      stageChart.remove()
+      volumeChart.remove()
       indicatorChart.remove()
     }
-  }, [])
+  }, [paneHeights.indicator, paneHeights.price, paneHeights.stage, paneHeights.volume])
 
   useEffect(() => {
-    if (!mainChartRef.current) {
+    const charts = [
+      { chart: priceChartRef.current, container: priceContainerRef.current, height: paneHeights.price },
+      { chart: stageChartRef.current, container: stageContainerRef.current, height: paneHeights.stage },
+      { chart: volumeChartRef.current, container: volumeContainerRef.current, height: paneHeights.volume },
+      { chart: indicatorChartRef.current, container: indicatorContainerRef.current, height: paneHeights.indicator },
+    ]
+
+    const applyChartSizes = () => {
+      charts.forEach(({ chart, container, height }) => {
+        if (!chart || !container) {
+          return
+        }
+        chart.applyOptions({
+          width: container.clientWidth,
+          height,
+        })
+      })
+    }
+
+    applyChartSizes()
+    window.addEventListener('resize', applyChartSizes)
+    return () => window.removeEventListener('resize', applyChartSizes)
+  }, [paneHeights.indicator, paneHeights.price, paneHeights.stage, paneHeights.volume])
+
+  useEffect(() => {
+    if (!priceChartRef.current || !priceContainerRef.current) {
       return
     }
 
-    const chart = mainChartRef.current
+    const tooltipWidth = isMobile ? 240 : 300
+    const tooltipHeight = isMobile ? 214 : 240
+    const tooltipPadding = 12
+    const tooltipOffsetX = isMobile ? 20 : 30
+    const tooltipOffsetY = isMobile ? 24 : 34
+    const tooltipFallbackGap = 18
     const handleCrosshairMove = (param: any) => {
-      if (!param?.time) {
-        setHoveredDateKey(null)
+      const point = param?.point
+      if (!param?.time || !point || point.x < 0 || point.y < 0) {
+        setTooltipState((current) => ({ ...current, visible: false, dateKey: null }))
         return
       }
 
@@ -234,17 +445,56 @@ export default function CandlestickChart({
           ? param.time
           : Date.UTC(param.time.year, param.time.month - 1, param.time.day) / 1000
       const dateKey = new Date(timeValue * 1000).toISOString().slice(0, 10)
-      setHoveredDateKey(hoverLookup[dateKey] ? dateKey : null)
+
+      if (!hoverLookup[dateKey]) {
+        setTooltipState((current) => ({ ...current, visible: false, dateKey: null }))
+        return
+      }
+
+      const containerWidth = priceContainerRef.current?.clientWidth ?? 0
+      const containerHeight = priceContainerRef.current?.clientHeight ?? 0
+      const maxX = Math.max(tooltipPadding, containerWidth - tooltipWidth - tooltipPadding)
+      const maxY = Math.max(tooltipPadding, containerHeight - tooltipHeight - tooltipPadding)
+
+      let nextX = point.x + tooltipOffsetX
+      let nextY = point.y + tooltipOffsetY
+
+      if (nextX > maxX) {
+        nextX = point.x - tooltipWidth - tooltipFallbackGap
+      }
+      if (nextY > maxY) {
+        nextY = point.y - tooltipHeight - tooltipFallbackGap
+      }
+
+      nextX = Math.min(Math.max(nextX, tooltipPadding), maxX)
+      nextY = Math.min(Math.max(nextY, tooltipPadding), maxY)
+
+      setTooltipState({
+        visible: true,
+        x: nextX,
+        y: nextY,
+        dateKey,
+      })
     }
 
-    chart.subscribeCrosshairMove(handleCrosshairMove)
-    return () => {
-      chart.unsubscribeCrosshairMove(handleCrosshairMove)
-    }
-  }, [hoverLookup])
+    priceChartRef.current.subscribeCrosshairMove(handleCrosshairMove)
+    return () => priceChartRef.current?.unsubscribeCrosshairMove(handleCrosshairMove)
+  }, [hoverLookup, isMobile])
 
   useEffect(() => {
-    if (!mainChartRef.current || !indicatorChartRef.current || !candlestickSeriesRef.current) {
+    priceChartRef.current?.applyOptions({
+      rightPriceScale: { mode: scale === 'log' ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal },
+    })
+  }, [scale])
+
+  useEffect(() => {
+    if (
+      !priceChartRef.current ||
+      !volumeChartRef.current ||
+      !indicatorChartRef.current ||
+      !candlestickSeriesRef.current ||
+      !stageChartRef.current
+    ) {
       return
     }
 
@@ -263,47 +513,68 @@ export default function CandlestickChart({
       const volumeData: HistogramData[] = validData.map((item) => ({
         time: toChartTime(item.date),
         value: Number(item.volume || 0),
-        color: Number(item.close) >= Number(item.open) ? 'rgba(34, 197, 94, 0.35)' : 'rgba(239, 68, 68, 0.35)',
+        color: Number(item.close) >= Number(item.open) ? 'rgba(34, 197, 94, 0.55)' : 'rgba(239, 68, 68, 0.55)',
       }))
       volumeSeriesRef.current.setData(volumeData)
     }
 
-    const smaPeriods = Object.keys(indicators?.sma ?? {}).sort((left, right) => Number(left) - Number(right))
-    smaPeriods.forEach((period, index) => {
-      const smaData = indicators?.sma?.[period]
-      if (showSMA && smaData) {
-        if (!smaSeriesRefs.current[period]) {
-          smaSeriesRefs.current[period] = mainChartRef.current!.addLineSeries({
-            color: getSmaColor(period, index),
-            lineWidth: 2,
+    if (stageSeriesRef.current) {
+      stageSeriesRef.current.setData(
+        (showWeinstein ? stageOverlay : []).map((item) => ({
+          time: toChartTime(item.date),
+          value: 1,
+          color: getStageColor(item.stage, 0.9),
+        }))
+      )
+    }
+    if (stageTimelineSeriesRef.current) {
+      stageTimelineSeriesRef.current.setData(
+        validData.map((item) => ({ time: toChartTime(item.date) }))
+      )
+    }
+
+    const activeSmaIds = new Set<string>()
+    orderedSmaConfigs.forEach((config) => {
+      const periodKey = String(config.period)
+      const seriesId = config.id
+      const smaData = indicators?.sma?.[periodKey]
+
+      if (showSMA && config.visible && smaData) {
+        activeSmaIds.add(seriesId)
+        if (!smaSeriesRefs.current[seriesId]) {
+          smaSeriesRefs.current[seriesId] = priceChartRef.current!.addLineSeries({
+            color: config.color,
+            lineWidth: config.lineWidth,
             priceLineVisible: false,
             lastValueVisible: false,
           })
         }
-        smaSeriesRefs.current[period].setData(
+
+        smaSeriesRefs.current[seriesId].applyOptions({
+          color: config.color,
+          lineWidth: config.lineWidth,
+        })
+        smaSeriesRefs.current[seriesId].setData(
           smaData
             .map((item) => ({ time: toChartTime(item.date), value: Number(item.value) }))
             .filter((item) => !Number.isNaN(item.value))
         )
-      } else if (smaSeriesRefs.current[period]) {
-        mainChartRef.current!.removeSeries(smaSeriesRefs.current[period])
-        delete smaSeriesRefs.current[period]
       }
     })
 
-    Object.keys(smaSeriesRefs.current).forEach((period) => {
-      if (!smaPeriods.includes(period) || !showSMA) {
-        mainChartRef.current?.removeSeries(smaSeriesRefs.current[period])
-        delete smaSeriesRefs.current[period]
+    Object.entries(smaSeriesRefs.current).forEach(([seriesId, series]) => {
+      if (!activeSmaIds.has(seriesId)) {
+        priceChartRef.current?.removeSeries(series)
+        delete smaSeriesRefs.current[seriesId]
       }
     })
 
     if (showBollinger && indicators?.bollinger) {
       if (bollingerSeriesRefs.current.length === 0) {
         bollingerSeriesRefs.current = [
-          mainChartRef.current.addLineSeries({ color: 'rgba(255,255,255,0.12)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
-          mainChartRef.current.addLineSeries({ color: 'rgba(255,255,255,0.2)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
-          mainChartRef.current.addLineSeries({ color: 'rgba(255,255,255,0.12)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+          priceChartRef.current.addLineSeries({ color: 'rgba(255,255,255,0.12)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+          priceChartRef.current.addLineSeries({ color: 'rgba(255,255,255,0.2)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+          priceChartRef.current.addLineSeries({ color: 'rgba(255,255,255,0.12)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
         ]
       }
       const bollingerData = indicators.bollinger
@@ -311,22 +582,22 @@ export default function CandlestickChart({
       bollingerSeriesRefs.current[1].setData(bollingerData.map((item) => ({ time: toChartTime(item.date), value: Number(item.middle) })))
       bollingerSeriesRefs.current[2].setData(bollingerData.map((item) => ({ time: toChartTime(item.date), value: Number(item.lower) })))
     } else {
-      bollingerSeriesRefs.current.forEach((series) => mainChartRef.current?.removeSeries(series))
+      bollingerSeriesRefs.current.forEach((series) => priceChartRef.current?.removeSeries(series))
       bollingerSeriesRefs.current = []
     }
 
-    darvasSeriesRefs.current.forEach((series) => mainChartRef.current?.removeSeries(series))
+    darvasSeriesRefs.current.forEach((series) => priceChartRef.current?.removeSeries(series))
     darvasSeriesRefs.current = []
     if (showDarvas && darvasBoxes) {
       const activeBox = darvasBoxes.find((box) => box.status === 'ACTIVE') ?? darvasBoxes[0]
       if (activeBox?.top && activeBox?.bottom) {
-        const topSeries = mainChartRef.current.addLineSeries({
+        const topSeries = priceChartRef.current.addLineSeries({
           color: COLORS.darvasBorder,
           lineWidth: 2,
           priceLineVisible: false,
           lastValueVisible: false,
         })
-        const bottomSeries = mainChartRef.current.addLineSeries({
+        const bottomSeries = priceChartRef.current.addLineSeries({
           color: COLORS.darvasBorder,
           lineWidth: 2,
           priceLineVisible: false,
@@ -340,13 +611,13 @@ export default function CandlestickChart({
       }
     }
 
-    fibonacciSeriesRefs.current.forEach((series) => mainChartRef.current?.removeSeries(series))
+    fibonacciSeriesRefs.current.forEach((series) => priceChartRef.current?.removeSeries(series))
     fibonacciSeriesRefs.current = []
     if (showFibonacci && fibonacci?.levels && data.length > 0) {
       const firstTime = toChartTime(data[0].date)
       const lastTime = toChartTime(data[data.length - 1].date)
       fibonacciSeriesRefs.current = Object.entries(fibonacci.levels).map(([level, price]) => {
-        const series = mainChartRef.current!.addLineSeries({
+        const series = priceChartRef.current!.addLineSeries({
           color: COLORS.fibonacciLine,
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
@@ -361,7 +632,7 @@ export default function CandlestickChart({
 
     if (showWeinstein && stageOverlay.length > 0) {
       if (!weinsteinMaSeriesRef.current) {
-        weinsteinMaSeriesRef.current = mainChartRef.current.addLineSeries({
+        weinsteinMaSeriesRef.current = priceChartRef.current.addLineSeries({
           color: '#fb923c',
           lineWidth: 2,
           lineStyle: LineStyle.Solid,
@@ -370,45 +641,67 @@ export default function CandlestickChart({
         })
       }
 
-      if (!stageStripSeriesRef.current) {
-        stageStripSeriesRef.current = mainChartRef.current.addHistogramSeries({
-          priceScaleId: 'stage-strip',
-          priceFormat: { type: 'volume' },
-          priceLineVisible: false,
-          lastValueVisible: false,
-        })
-        mainChartRef.current.priceScale('stage-strip').applyOptions({
-          scaleMargins: { top: 0.9, bottom: 0.02 },
-          visible: false,
-        })
-      }
-
       weinsteinMaSeriesRef.current.setData(
         stageOverlay
           .filter((item) => item.ma30w != null)
           .map((item) => ({ time: toChartTime(item.date), value: Number(item.ma30w) }))
       )
-      stageStripSeriesRef.current.setData(
-        stageOverlay.map((item) => ({
-          time: toChartTime(item.date),
-          value: 1,
-          color: getStageColor(item.stage, 0.55),
-        }))
-      )
-    } else {
-      if (weinsteinMaSeriesRef.current) {
-        mainChartRef.current.removeSeries(weinsteinMaSeriesRef.current)
-        weinsteinMaSeriesRef.current = null
-      }
-      if (stageStripSeriesRef.current) {
-        mainChartRef.current.removeSeries(stageStripSeriesRef.current)
-        stageStripSeriesRef.current = null
+    } else if (weinsteinMaSeriesRef.current) {
+      priceChartRef.current.removeSeries(weinsteinMaSeriesRef.current)
+      weinsteinMaSeriesRef.current = null
+    }
+
+    updateBottomIndicator(
+      indicatorChartRef.current,
+      bottomSeriesRefs,
+      activeIndicator,
+      indicators,
+      relativeStrength,
+      validData.map((item) => item.date)
+    )
+
+    const currentWindow = {
+      oldest: validData[0]?.date ?? null,
+      newest: validData[validData.length - 1]?.date ?? null,
+      length: validData.length,
+    }
+    const previousWindow = previousWindowRef.current
+    const windowChanged =
+      currentWindow.oldest !== previousWindow.oldest ||
+      currentWindow.newest !== previousWindow.newest ||
+      currentWindow.length !== previousWindow.length
+    const isOlderPrepend =
+      previousWindow.length > 0 &&
+      currentWindow.length > previousWindow.length &&
+      currentWindow.newest === previousWindow.newest &&
+      currentWindow.oldest !== previousWindow.oldest
+
+    if (windowChanged) {
+      if (isOlderPrepend && pendingPrependRangeRef.current) {
+        const addedBars = currentWindow.length - previousWindow.length
+        programmaticRangeChangeRef.current = true
+        priceChartRef.current.timeScale().setVisibleLogicalRange({
+          from: pendingPrependRangeRef.current.from + addedBars,
+          to: pendingPrependRangeRef.current.to + addedBars,
+        })
+        window.setTimeout(() => {
+          programmaticRangeChangeRef.current = false
+        }, 0)
+      } else if (currentWindow.length > 0 && previousWindow.length === 0) {
+        programmaticRangeChangeRef.current = true
+        priceChartRef.current.timeScale().fitContent()
+        window.setTimeout(() => {
+          programmaticRangeChangeRef.current = false
+        }, 0)
       }
     }
 
-    updateBottomIndicator(indicatorChartRef.current, bottomSeriesRefs, activeIndicator, indicators, relativeStrength)
-    mainChartRef.current.timeScale().fitContent()
-    indicatorChartRef.current.timeScale().fitContent()
+    latestVisibleRangeRef.current = priceChartRef.current.timeScale().getVisibleLogicalRange()
+    if (currentWindow.oldest !== previousWindow.oldest) {
+      olderBoundaryInFlightRef.current = null
+    }
+    pendingPrependRangeRef.current = null
+    previousWindowRef.current = currentWindow
   }, [
     activeIndicator,
     darvasBoxes,
@@ -421,118 +714,313 @@ export default function CandlestickChart({
     showFibonacci,
     showSMA,
     showWeinstein,
+    orderedSmaConfigs,
     stageOverlay,
   ])
 
-  useEffect(() => {
-    mainChartRef.current?.applyOptions({
-      rightPriceScale: { mode: scale === 'log' ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal },
-    })
-  }, [scale])
-
-  useEffect(() => {
-    const handleResize = () => {
-      const width = mainContainerRef.current?.clientWidth || 0
-      mainChartRef.current?.applyOptions({ width })
-      indicatorChartRef.current?.applyOptions({ width })
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
-
-  const smaLegend = useMemo(
-    () =>
-      Object.keys(indicators?.sma ?? {})
-        .sort((left, right) => Number(left) - Number(right))
-        .map((period, index) => ({
-          period,
-          color: getSmaColor(period, index),
-          value: activeSnapshot?.sma?.[period] ?? null,
-        })),
-    [activeSnapshot?.sma, indicators?.sma]
-  )
+  const inlineLegend = visibleSmaConfigs.map((config) => ({
+    ...config,
+    value: showSMA ? legendSnapshot?.sma?.[String(config.period)] ?? null : null,
+  }))
 
   return (
     <div className="w-full">
-      <div className="mb-4 grid gap-4 xl:grid-cols-[1.2fr_1fr]">
-        <div className="rounded-2xl border border-gray-800 bg-[#0b0e14] p-4">
-          <div className="flex items-start justify-between gap-4">
+      <div className="mb-4 rounded-2xl border border-gray-800 bg-[#0b0e14] p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
             <div>
-              <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">
-                {hoveredDateKey ? 'Hover Snapshot' : 'Current Value'}
-              </div>
-              <div className="mt-2 flex items-baseline gap-3">
-                <div className="text-3xl font-black">{activeSnapshot ? formatPrice(activeSnapshot.close) : '-'}</div>
-                <div className={`text-sm font-black ${headlineChange != null && headlineChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {headlineChange != null ? `${headlineChange >= 0 ? '+' : ''}${headlineChange.toFixed(2)}%` : '-'}
+              <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">Chart Summary</div>
+              <div className="mt-1 flex items-baseline gap-3">
+                <div className="text-3xl font-black">{latestSnapshot ? formatPrice(latestSnapshot.close) : '-'}</div>
+                <div className={`text-sm font-black ${(latestSnapshot?.changePct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {latestSnapshot?.changePct != null ? `${latestSnapshot.changePct >= 0 ? '+' : ''}${latestSnapshot.changePct.toFixed(2)}%` : '-'}
                 </div>
               </div>
             </div>
-            <div className="text-right text-xs text-gray-400">
-              <div>{activeSnapshot?.date ?? '-'}</div>
-              {activeSnapshot?.stage && (
-                <div className="mt-1">
-                  Stage {activeSnapshot.stage.stage} · {activeSnapshot.stage.label}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <InfoPill label="Open" value={activeSnapshot ? formatPrice(activeSnapshot.open) : '-'} />
-            <InfoPill label="High" value={activeSnapshot ? formatPrice(activeSnapshot.high) : '-'} />
-            <InfoPill label="Low" value={activeSnapshot ? formatPrice(activeSnapshot.low) : '-'} />
-            <InfoPill label="Close" value={activeSnapshot ? formatPrice(activeSnapshot.close) : '-'} />
-            <InfoPill label="Volume" value={activeSnapshot ? formatVolume(activeSnapshot.volume) : '-'} />
-            <InfoPill label="Change" value={activeSnapshot?.changePct != null ? `${activeSnapshot.changePct >= 0 ? '+' : ''}${activeSnapshot.changePct.toFixed(2)}%` : '-'} />
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-gray-800 bg-[#0b0e14] p-4">
-          <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">SMA Legend</div>
-          <div className="mt-3 space-y-2">
-            {smaLegend.length > 0 ? (
-              smaLegend.map((item) => (
-                <div key={item.period} className="flex items-center justify-between rounded-xl bg-[#131722] px-3 py-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                    <span className="font-black text-gray-100">SMA {item.period}</span>
-                  </div>
-                  <span className="font-mono text-gray-300">{item.value != null ? formatPrice(item.value) : '-'}</span>
-                </div>
-              ))
-            ) : (
-              <div className="text-sm text-gray-500">No SMA data</div>
+            {latestSnapshot?.stage && (
+              <div
+                className="rounded-full px-3 py-1 text-[11px] font-black text-white"
+                style={{ backgroundColor: getStageColor(latestSnapshot.stage.stage, 1) }}
+              >
+                STAGE {latestSnapshot.stage.stage}
+              </div>
             )}
+            <div className="rounded-full border border-gray-800 bg-[#131722] px-3 py-1 text-[11px] font-black text-gray-300">
+              ACTIVE SMA {activeSmaCount}
+            </div>
           </div>
 
-          {(activeSnapshot?.rs || activeSnapshot?.stage) && (
-            <div className="mt-4 space-y-2 rounded-xl border border-gray-800 bg-[#131722] p-3 text-xs">
-              {activeSnapshot?.stage && (
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-400">30W MA / Mansfield</span>
-                  <span className="font-bold text-gray-100">
-                    {activeSnapshot.stage.ma30w != null ? formatPrice(activeSnapshot.stage.ma30w) : '-'} / {activeSnapshot.stage.mansfield != null ? `${activeSnapshot.stage.mansfield >= 0 ? '+' : ''}${activeSnapshot.stage.mansfield.toFixed(2)}` : '-'}
-                  </span>
+          <div className="flex flex-wrap items-center gap-2">
+            {isFetchingOlder && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-amber-200">
+                Loading History
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsSmaSettingsOpen((current) => !current)}
+              className="rounded-lg border border-gray-700 bg-[#131722] px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-gray-200 hover:border-blue-500"
+            >
+              SMA Settings
+            </button>
+            <button
+              type="button"
+              onClick={onToggleHeaderCollapsed}
+              className="rounded-lg border border-gray-700 bg-[#131722] px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-gray-200 hover:border-blue-500"
+            >
+              {headerCollapsed ? 'Expand' : 'Collapse'}
+            </button>
+          </div>
+        </div>
+
+        {!headerCollapsed && latestSnapshot && (
+          <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_1fr]">
+            <div className="rounded-2xl border border-gray-800 bg-[#131722] p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">Latest Snapshot</div>
+                  <div className="mt-2 text-xs text-gray-400">{latestSnapshot.date}</div>
                 </div>
-              )}
-              {activeSnapshot?.rs && (
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-400">RS Stock / Benchmark / Ratio</span>
-                  <span className="font-bold text-gray-100">
-                    {activeSnapshot.rs.stock.toFixed(2)} / {activeSnapshot.rs.benchmark.toFixed(2)} / {activeSnapshot.rs.ratio.toFixed(2)}
-                  </span>
+                {latestSnapshot.stage && (
+                  <div className="text-right text-xs text-gray-400">
+                    Stage {latestSnapshot.stage.stage} · {latestSnapshot.stage.label}
+                  </div>
+                )}
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                <InfoPill label="Open" value={formatPrice(latestSnapshot.open)} />
+                <InfoPill label="High" value={formatPrice(latestSnapshot.high)} />
+                <InfoPill label="Low" value={formatPrice(latestSnapshot.low)} />
+                <InfoPill label="Close" value={formatPrice(latestSnapshot.close)} />
+                <InfoPill label="Volume" value={formatVolume(latestSnapshot.volume)} />
+                <InfoPill label="Change" value={latestSnapshot.changePct != null ? `${latestSnapshot.changePct >= 0 ? '+' : ''}${latestSnapshot.changePct.toFixed(2)}%` : '-'} />
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-gray-800 bg-[#131722] p-4">
+              <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">SMA / RS Overview</div>
+              <div className="mt-3 space-y-2">
+                {inlineLegend.length > 0 ? (
+                  inlineLegend.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between rounded-xl bg-[#0b0e14] px-3 py-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                        <span className="font-black text-gray-100">SMA {item.period}</span>
+                      </div>
+                      <span className="font-mono text-gray-300">{item.value != null ? formatPrice(item.value) : '-'}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-gray-500">No visible SMA lines</div>
+                )}
+              </div>
+
+              {(latestSnapshot.rs || latestSnapshot.stage) && (
+                <div className="mt-4 space-y-2 rounded-xl border border-gray-800 bg-[#0b0e14] p-3 text-xs">
+                  {latestSnapshot.stage && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-400">30W MA / Mansfield</span>
+                      <span className="font-bold text-gray-100">
+                        {latestSnapshot.stage.ma30w != null ? formatPrice(latestSnapshot.stage.ma30w) : '-'} / {latestSnapshot.stage.mansfield != null ? `${latestSnapshot.stage.mansfield >= 0 ? '+' : ''}${latestSnapshot.stage.mansfield.toFixed(2)}` : '-'}
+                      </span>
+                    </div>
+                  )}
+                  {latestSnapshot.rs && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-400">RS Stock / Benchmark / Ratio</span>
+                      <span className="font-bold text-gray-100">
+                        {latestSnapshot.rs.stock.toFixed(2)} / {latestSnapshot.rs.benchmark.toFixed(2)} / {latestSnapshot.rs.ratio.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {isSmaSettingsOpen && (
+          <div className="mt-4 rounded-2xl border border-gray-800 bg-[#131722] p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">SMA Config Editor</div>
+                <div className="mt-1 text-xs text-gray-400">Period changes refetch data. Color, width, visibility update immediately.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSmaSettingsOpen(false)}
+                className="rounded-lg border border-gray-700 bg-[#0b0e14] px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-gray-200"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+              {orderedSmaConfigs.map((config) => (
+                <div key={config.id} className="grid gap-3 rounded-xl border border-gray-800 bg-[#0b0e14] p-3 lg:grid-cols-[auto_120px_90px_90px_auto]">
+                  <label className="flex items-center gap-2 text-sm font-bold text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={config.visible}
+                      onChange={(event) => updateSmaConfig(config.id, { visible: event.target.checked }, orderedSmaConfigs, onSmaConfigsChange)}
+                    />
+                    SHOW
+                  </label>
+
+                  <input
+                    type="number"
+                    min={2}
+                    max={240}
+                    value={config.period}
+                    onChange={(event) => updateSmaPeriod(config.id, Number(event.target.value), orderedSmaConfigs, onSmaConfigsChange)}
+                    className="rounded-lg border border-gray-700 bg-[#131722] px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+                  />
+
+                  <input
+                    type="color"
+                    value={config.color}
+                    onChange={(event) => updateSmaConfig(config.id, { color: event.target.value }, orderedSmaConfigs, onSmaConfigsChange)}
+                    className="h-10 w-full rounded-lg border border-gray-700 bg-[#131722] px-2 py-1"
+                  />
+
+                  <select
+                    value={config.lineWidth}
+                    onChange={(event) => updateSmaConfig(config.id, { lineWidth: Number(event.target.value) as 1 | 2 | 3 | 4 }, orderedSmaConfigs, onSmaConfigsChange)}
+                    className="rounded-lg border border-gray-700 bg-[#131722] px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+                  >
+                    <option value={1}>WIDTH 1</option>
+                    <option value={2}>WIDTH 2</option>
+                    <option value={3}>WIDTH 3</option>
+                    <option value={4}>WIDTH 4</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => removeSmaConfig(config.id, orderedSmaConfigs, onSmaConfigsChange)}
+                    disabled={orderedSmaConfigs.length <= 1}
+                    className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => addSmaConfig(orderedSmaConfigs, onSmaConfigsChange)}
+                disabled={orderedSmaConfigs.length >= MAX_SMA_LINES}
+                className="rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Add SMA Line
+              </button>
+              <div className="text-xs text-gray-500">Max {MAX_SMA_LINES} lines</div>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="flex flex-col gap-2 w-full relative">
-        <div ref={mainContainerRef} className="w-full bg-[#131722] rounded-t-xl border-x border-t border-gray-800 overflow-hidden shadow-2xl" />
-        <div ref={indicatorContainerRef} className="w-full bg-[#131722] rounded-b-xl border border-gray-800 overflow-hidden shadow-2xl" />
+      <div className="relative">
+        <div ref={priceContainerRef} className="w-full overflow-hidden rounded-t-2xl border border-gray-800 bg-[#131722] shadow-2xl" />
+
+      {showSMA && inlineLegend.length > 0 && (
+        <div className="pointer-events-auto absolute left-3 top-3 z-20 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-2 rounded-xl border border-gray-800 bg-[#0b0e14]/95 px-3 py-2 shadow-xl">
+            {inlineLegend.map((item) => (
+              <div key={item.id} className="flex items-center gap-2 rounded-full border border-gray-800 bg-[#131722] px-3 py-1 text-[11px] font-black">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                <span>SMA {item.period}</span>
+                <span className="font-mono text-gray-400">{item.value != null ? formatPrice(item.value) : '-'}</span>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setIsSmaSettingsOpen((current) => !current)}
+              className="rounded-full border border-gray-700 bg-[#131722] px-3 py-1 text-[11px] font-black uppercase tracking-[0.18em] text-gray-200"
+            >
+              Gear
+            </button>
+          </div>
+        )}
+
+        {tooltipState.visible && tooltipSnapshot && (
+          <div
+            className="pointer-events-none absolute z-30 w-[240px] max-w-[calc(100%-1.5rem)] rounded-2xl border border-white/10 bg-[#08111d]/62 p-3.5 shadow-[0_16px_34px_rgba(0,0,0,0.28)] backdrop-blur-md sm:w-[300px]"
+            style={{ left: tooltipState.x, top: tooltipState.y }}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">Hover Tooltip</div>
+                <div className="mt-1 text-sm font-bold text-gray-100">{tooltipSnapshot.date}</div>
+              </div>
+              {tooltipSnapshot.stage && (
+                <div
+                  className="rounded-full px-3 py-1 text-[10px] font-black text-white"
+                  style={{ backgroundColor: getStageColor(tooltipSnapshot.stage.stage, 1) }}
+                >
+                  STAGE {tooltipSnapshot.stage.stage}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <TooltipRow label="Open" value={formatPrice(tooltipSnapshot.open)} />
+              <TooltipRow label="High" value={formatPrice(tooltipSnapshot.high)} />
+              <TooltipRow label="Low" value={formatPrice(tooltipSnapshot.low)} />
+              <TooltipRow label="Close" value={formatPrice(tooltipSnapshot.close)} />
+              <TooltipRow label="Change" value={tooltipSnapshot.changePct != null ? `${tooltipSnapshot.changePct >= 0 ? '+' : ''}${tooltipSnapshot.changePct.toFixed(2)}%` : '-'} />
+              <TooltipRow label="Volume" value={formatVolume(tooltipSnapshot.volume)} />
+            </div>
+
+            {showSMA && visibleSmaConfigs.length > 0 && (
+              <div className="mt-3 space-y-2">
+                <div className="text-[10px] font-black tracking-[0.18em] text-gray-500 uppercase">Visible SMA</div>
+                {visibleSmaConfigs.map((config) => (
+                  <div key={config.id} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-gray-300">
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: config.color }} />
+                      <span>SMA {config.period}</span>
+                    </div>
+                    <span className="font-mono text-gray-100">{tooltipSnapshot.sma[String(config.period)] != null ? formatPrice(tooltipSnapshot.sma[String(config.period)] as number) : '-'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-3 grid gap-2 border-t border-white/10 pt-3 sm:grid-cols-2">
+              {buildActiveIndicatorRows(activeIndicator, tooltipSnapshot).map((row) => (
+                <TooltipRow key={row.label} label={row.label} value={row.value} />
+              ))}
+              <TooltipRow
+                label="Mansfield"
+                value={
+                  tooltipSnapshot.rs?.mansfield != null
+                    ? `${tooltipSnapshot.rs.mansfield >= 0 ? '+' : ''}${tooltipSnapshot.rs.mansfield.toFixed(2)}`
+                    : tooltipSnapshot.stage?.mansfield != null
+                      ? `${tooltipSnapshot.stage.mansfield >= 0 ? '+' : ''}${tooltipSnapshot.stage.mansfield.toFixed(2)}`
+                      : '-'
+                }
+              />
+            </div>
+          </div>
+        )}
       </div>
+
+      <div ref={stageContainerRef} className="w-full border-x border-gray-800 bg-[#131722]" />
+
+      {showWeinstein && (
+        <div className="flex flex-wrap items-center gap-2 border-x border-gray-800 bg-[#131722] px-3 py-2">
+          {STAGE_LEGEND.map((item) => (
+            <div key={item.stage} className="flex items-center gap-2 rounded-full border border-gray-800 bg-[#0b0e14] px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-gray-300">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: getStageColor(item.stage, 1) }} />
+              <span>{item.stage} {item.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div ref={volumeContainerRef} className="w-full border-x border-t border-gray-800 bg-[#131722]" />
+      <div ref={indicatorContainerRef} className="w-full overflow-hidden rounded-b-2xl border border-gray-800 bg-[#131722] shadow-2xl" />
     </div>
   )
 }
@@ -543,9 +1031,22 @@ function updateBottomIndicator(
   type: 'rsi' | 'macd' | 'vpci' | 'rs',
   indicators: CandlestickChartProps['indicators'],
   relativeStrength?: RelativeStrengthData | null,
+  timelineDates: string[] = [],
 ) {
   refs.current.forEach((series) => chart.removeSeries(series))
   refs.current = []
+
+  if (timelineDates.length > 0) {
+    const anchorSeries = chart.addLineSeries({
+      color: 'rgba(0,0,0,0)',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    })
+    anchorSeries.setData(timelineDates.map((date) => ({ time: toChartTime(date) })))
+    refs.current.push(anchorSeries)
+  }
 
   if (type === 'rsi' && indicators?.rsi) {
     const series = chart.addLineSeries({ color: '#8b5cf6', lineWidth: 2, title: 'RSI' })
@@ -591,17 +1092,6 @@ function updateBottomIndicator(
       .map((item) => ({ time: toChartTime(item.date), value: Number(item.value), signal: item.signal }))
       .filter((item) => !Number.isNaN(item.value))
     series.setData(data.map((item) => ({ time: item.time, value: item.value })))
-    series.setMarkers(
-      data
-        .filter((item) => item.signal && item.signal.includes('DIVERGE'))
-        .map((item) => ({
-          time: item.time,
-          position: item.signal === 'DIVERGE_BEAR' ? 'aboveBar' : 'belowBar',
-          color: item.signal === 'DIVERGE_BEAR' ? '#ef4444' : '#22c55e',
-          shape: 'circle',
-          text: 'Div',
-        })) as any
-    )
     refs.current.push(series)
     return
   }
@@ -629,10 +1119,7 @@ function buildStageOverlayData(data: OHLCV[], history: NonNullable<WeinsteinData
 
   return data
     .map((point) => {
-      while (
-        historyIndex + 1 < sortedHistory.length &&
-        sortedHistory[historyIndex + 1].date <= point.date
-      ) {
+      while (historyIndex + 1 < sortedHistory.length && sortedHistory[historyIndex + 1].date <= point.date) {
         historyIndex += 1
         currentHistory = sortedHistory[historyIndex]
       }
@@ -657,7 +1144,7 @@ function buildHoverLookup(
   indicators: CandlestickChartProps['indicators'],
   stageOverlay: StageOverlayPoint[],
   relativeStrength?: RelativeStrengthData | null,
-): Record<string, HoverSnapshot> {
+): Record<string, ChartHoverSnapshot> {
   const smaMap = new Map<string, Record<string, number>>()
   Object.entries(indicators?.sma ?? {}).forEach(([period, values]) => {
     values.forEach((item) => {
@@ -685,7 +1172,7 @@ function buildHoverLookup(
   const rsMap = new Map<string, RelativeStrengthData['series'][number]>()
   relativeStrength?.series?.forEach((item) => rsMap.set(item.date, item))
 
-  return data.reduce<Record<string, HoverSnapshot>>((accumulator, item, index) => {
+  return data.reduce<Record<string, ChartHoverSnapshot>>((accumulator, item, index) => {
     const previousClose = index > 0 ? data[index - 1].close : null
     accumulator[item.date] = {
       date: item.date,
@@ -694,10 +1181,7 @@ function buildHoverLookup(
       low: item.low,
       close: item.close,
       volume: item.volume,
-      changePct:
-        previousClose != null && previousClose !== 0
-          ? ((item.close - previousClose) / previousClose) * 100
-          : null,
+      changePct: previousClose != null && previousClose !== 0 ? ((item.close - previousClose) / previousClose) * 100 : null,
       sma: smaMap.get(item.date) ?? {},
       bollinger: bollingerMap.has(item.date)
         ? {
@@ -741,21 +1225,121 @@ function buildHoverLookup(
   }, {})
 }
 
+function updateSmaConfig(
+  id: string,
+  patch: Partial<SmaConfig>,
+  configs: SmaConfig[],
+  onChange: (configs: SmaConfig[]) => void,
+) {
+  onChange(configs.map((config) => (config.id === id ? { ...config, ...patch } : config)))
+}
+
+function updateSmaPeriod(
+  id: string,
+  nextPeriod: number,
+  configs: SmaConfig[],
+  onChange: (configs: SmaConfig[]) => void,
+) {
+  const normalizedPeriod = Math.min(240, Math.max(2, Math.round(nextPeriod || 2)))
+  const hasDuplicate = configs.some((config) => config.id !== id && config.period === normalizedPeriod)
+  if (hasDuplicate) {
+    return
+  }
+
+  onChange(configs.map((config) => (config.id === id ? { ...config, period: normalizedPeriod } : config)))
+}
+
+function addSmaConfig(configs: SmaConfig[], onChange: (configs: SmaConfig[]) => void) {
+  if (configs.length >= MAX_SMA_LINES) {
+    return
+  }
+
+  const usedPeriods = new Set(configs.map((config) => config.period))
+  const fallbackPeriod = [5, 10, 20, 30, 60, 120, 180].find((period) => !usedPeriods.has(period)) ?? (configs[configs.length - 1]?.period ?? 10) + 5
+
+  onChange([
+    ...configs,
+    {
+      id: `sma-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      visible: true,
+      period: Math.min(240, fallbackPeriod),
+      color: DEFAULT_SMA_COLORS[configs.length % DEFAULT_SMA_COLORS.length],
+      lineWidth: 2,
+    },
+  ])
+}
+
+function removeSmaConfig(
+  id: string,
+  configs: SmaConfig[],
+  onChange: (configs: SmaConfig[]) => void,
+) {
+  if (configs.length <= 1) {
+    return
+  }
+  onChange(configs.filter((config) => config.id !== id))
+}
+
 function InfoPill({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-[#131722] px-3 py-2">
+    <div className="rounded-xl bg-[#0b0e14] px-3 py-2">
       <div className="text-[10px] font-black tracking-[0.18em] text-gray-500 uppercase">{label}</div>
       <div className="mt-1 text-sm font-bold text-gray-100">{value}</div>
     </div>
   )
 }
 
-function toChartTime(dateValue: string): Time {
-  return (new Date(dateValue).getTime() / 1000) as Time
+function TooltipRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2">
+      <div className="text-[10px] font-black tracking-[0.16em] text-gray-500 uppercase">{label}</div>
+      <div className="mt-1 text-xs font-bold text-gray-100">{value}</div>
+    </div>
+  )
 }
 
-function getSmaColor(_period: string, index: number) {
-  return SMA_COLOR_PALETTE[index % SMA_COLOR_PALETTE.length]
+function buildActiveIndicatorRows(
+  activeIndicator: CandlestickChartProps['activeIndicator'],
+  snapshot: ChartHoverSnapshot,
+) {
+  if (activeIndicator === 'rsi') {
+    return [{ label: 'RSI', value: snapshot.rsi != null ? snapshot.rsi.toFixed(2) : '-' }]
+  }
+
+  if (activeIndicator === 'macd') {
+    return [
+      { label: 'MACD', value: snapshot.macd?.value != null ? snapshot.macd.value.toFixed(2) : '-' },
+      { label: 'MACD Signal', value: snapshot.macd?.signal != null ? snapshot.macd.signal.toFixed(2) : '-' },
+      { label: 'Histogram', value: snapshot.macd?.histogram != null ? snapshot.macd.histogram.toFixed(2) : '-' },
+    ]
+  }
+
+  if (activeIndicator === 'vpci') {
+    return [
+      { label: 'VPCI', value: snapshot.vpci?.value != null ? snapshot.vpci.value.toFixed(2) : '-' },
+      { label: 'VPCI Signal', value: snapshot.vpci?.signal ?? '-' },
+    ]
+  }
+
+  if (activeIndicator === 'rs') {
+    return [
+      { label: 'RS Stock', value: snapshot.rs ? snapshot.rs.stock.toFixed(2) : '-' },
+      { label: 'RS Benchmark', value: snapshot.rs ? snapshot.rs.benchmark.toFixed(2) : '-' },
+      { label: 'RS Ratio', value: snapshot.rs ? snapshot.rs.ratio.toFixed(2) : '-' },
+    ]
+  }
+
+  return []
+}
+
+function getPaneHeights(isMobile: boolean) {
+  return isMobile
+    ? { price: 400, stage: 12, volume: 110, indicator: 150 }
+    : { price: 560, stage: 14, volume: 140, indicator: 180 }
+}
+
+function toChartTime(dateValue: string): Time {
+  return (new Date(dateValue).getTime() / 1000) as Time
 }
 
 function getStageColor(stage: number, alpha = 1) {

@@ -182,7 +182,7 @@ class DataService:
         Convert daily OHLCV to weekly OHLCV
         Groups by week (Monday-based)
         """
-        daily_data = await self.get_ohlcv_daily(db, stock_id, limit=1000)
+        daily_data = await self.get_ohlcv_daily(db, stock_id)
 
         await db.execute(delete(OHLCWeekly).where(OHLCWeekly.stock_id == stock_id))
 

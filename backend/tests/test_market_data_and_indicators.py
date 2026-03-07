@@ -85,31 +85,62 @@ async def test_calculate_basic_indicators_respects_custom_sma_periods():
 @pytest.mark.asyncio
 async def test_get_weinstein_indicator_returns_history_and_description(monkeypatch):
     """Weinstein 응답에 현재 stage, 설명, 히스토리 strip 데이터가 포함되는지 검증한다."""
+    captured = {}
 
-    async def fake_load_price_frame(db, ticker, timeframe, min_daily_records=120):
+    async def fake_load_price_frame(
+        db,
+        ticker,
+        timeframe,
+        min_daily_records=120,
+        start_date=None,
+        end_date=None,
+    ):
+        captured[ticker] = {
+            "timeframe": timeframe,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
         if ticker == "069500":
             return _stock_stub("069500", "KODEX 200"), _weekly_frame(90, 0.6)
         return _stock_stub("010950", "S-Oil"), _weekly_frame(100, 1.2)
 
     monkeypatch.setattr("app.api.v1.indicators._load_price_frame", fake_load_price_frame)
 
-    response = await get_weinstein_indicator(ticker="010950", benchmark_ticker="069500", db=None)
+    response = await get_weinstein_indicator(
+        ticker="010950",
+        benchmark_ticker="069500",
+        start_date=date(2024, 1, 1),
+        end_date=date(2025, 12, 31),
+        db=None,
+    )
     weinstein = response["weinstein"]
 
     print("\n[STAGE 히스토리 테스트] 현재 stage:", weinstein["current_stage"])
     print("[STAGE 히스토리 테스트] 설명 제목:", weinstein["description"]["title"])
     print("[STAGE 히스토리 테스트] 히스토리 길이:", len(weinstein["stage_history"]))
+    print("[STAGE 히스토리 테스트] 전달된 기간:", captured["010950"]["start_date"], "->", captured["010950"]["end_date"])
 
     assert weinstein["current_stage"] in {2, 3}
     assert weinstein["description"]["title"]
     assert len(weinstein["stage_history"]) > 10
+    assert captured["010950"]["start_date"] == date(2024, 1, 1)
+    assert captured["010950"]["end_date"] == date(2025, 12, 31)
+    assert captured["069500"]["start_date"] == date(2024, 1, 1)
+    assert captured["069500"]["end_date"] == date(2025, 12, 31)
 
 
 @pytest.mark.asyncio
 async def test_get_relative_strength_returns_benchmark_comparison_series(monkeypatch):
     """RS API가 벤치마크 비교 시계열과 Mansfield 값을 반환하는지 검증한다."""
 
-    async def fake_load_price_frame(db, ticker, timeframe, min_daily_records=120):
+    async def fake_load_price_frame(
+        db,
+        ticker,
+        timeframe,
+        min_daily_records=120,
+        start_date=None,
+        end_date=None,
+    ):
         if ticker == "069500":
             return _stock_stub("069500", "KODEX 200"), _weekly_frame(90, 0.6)
         return _stock_stub("010950", "S-Oil"), _weekly_frame(100, 1.2)
@@ -137,7 +168,14 @@ async def test_get_relative_strength_returns_benchmark_comparison_series(monkeyp
 async def test_get_fibonacci_levels_supports_manual_mode(monkeypatch):
     """수동 Fibonacci 모드에서 전달한 swing low/high 기준으로 레벨을 계산하는지 검증한다."""
 
-    async def fake_load_price_frame(db, ticker, timeframe, min_daily_records=120):
+    async def fake_load_price_frame(
+        db,
+        ticker,
+        timeframe,
+        min_daily_records=120,
+        start_date=None,
+        end_date=None,
+    ):
         frame = pd.DataFrame(
             [
                 {"date": date(2025, 1, 1), "open": 100, "high": 105, "low": 95, "close": 102, "volume": 1000},

@@ -27,6 +27,7 @@ class DummyDB:
 async def test_convert_daily_to_weekly_uses_oldest_open_and_latest_close(monkeypatch):
     """주봉 생성 시 시가/종가/고가/저가/거래량 집계가 올바른지 검증한다."""
     db = DummyDB()
+    captured = {}
     daily_rows = [
         SimpleNamespace(date=date, open=open_, high=high, low=low, close=close, volume=volume)
         for date, open_, high, low, close, volume in [
@@ -37,6 +38,7 @@ async def test_convert_daily_to_weekly_uses_oldest_open_and_latest_close(monkeyp
     ]
 
     async def fake_get_daily(*args, **kwargs):
+        captured["limit"] = kwargs.get("limit")
         return daily_rows
 
     monkeypatch.setattr(data_service, "get_ohlcv_daily", fake_get_daily)
@@ -46,6 +48,7 @@ async def test_convert_daily_to_weekly_uses_oldest_open_and_latest_close(monkeyp
     assert weekly_count == 1
     weekly = db.added[0]
     print("\n[주봉 변환 테스트] 생성 건수:", weekly_count)
+    print("[주봉 변환 테스트] get_ohlcv_daily limit:", captured.get("limit"))
     print(
         "[주봉 변환 테스트] open/high/low/close/volume =",
         float(weekly.open),
@@ -59,3 +62,4 @@ async def test_convert_daily_to_weekly_uses_oldest_open_and_latest_close(monkeyp
     assert float(weekly.high) == 120
     assert float(weekly.low) == 99
     assert int(weekly.volume) == 600
+    assert captured.get("limit") is None

@@ -135,12 +135,68 @@ export interface RelativeStrengthData {
   series: RelativeStrengthPoint[];
 }
 
+export interface SmaConfig {
+  id: string;
+  visible: boolean;
+  period: number;
+  color: string;
+  lineWidth: 1 | 2 | 3 | 4;
+}
+
+export type CollapsedHeaderState = 'collapsed' | 'expanded';
+
+export interface ChartHoverSnapshot {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  changePct: number | null;
+  sma: Record<string, number | null>;
+  bollinger?: {
+    upper: number | null;
+    middle: number | null;
+    lower: number | null;
+  };
+  rsi?: number | null;
+  macd?: {
+    value: number | null;
+    signal: number | null;
+    histogram: number | null;
+  };
+  vpci?: {
+    value: number | null;
+    signal?: string;
+  };
+  stage?: {
+    stage: number;
+    label: string;
+    ma30w: number | null;
+    mansfield: number | null;
+  } | null;
+  rs?: {
+    stock: number;
+    benchmark: number;
+    ratio: number;
+    mansfield: number | null;
+  } | null;
+}
+
+export interface ChartHistoryMetadata {
+  oldest_date: string | null;
+  newest_date: string | null;
+  has_more_before: boolean;
+  loaded_count: number;
+}
+
 export interface ChartDataResponse {
   ticker: string;
   name: string;
   timeframe: string;
   scale: string;
   ohlcv: OHLCV[];
+  history: ChartHistoryMetadata;
   indicators: {
     sma?: Record<string, IndicatorData[]>;
     macd?: MACDData[];

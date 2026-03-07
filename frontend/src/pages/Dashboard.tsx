@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
 import CandlestickChart from '../components/Chart/CandlestickChart'
@@ -8,7 +8,7 @@ import { useChartData } from '../hooks/useChartData'
 import { useFinancialMetrics } from '../hooks/useFinancialMetrics'
 import { useIndicators } from '../hooks/useIndicators'
 import { useRelativeStrength } from '../hooks/useRelativeStrength'
-import { COLORS } from '../types'
+import { COLORS, SmaConfig } from '../types'
 
 type Timeframe = 'daily' | 'weekly' | 'monthly'
 type ScaleMode = 'linear' | 'log'
@@ -16,31 +16,47 @@ type IndicatorTab = 'rsi' | 'macd' | 'vpci' | 'rs'
 type FibonacciMode = 'auto' | 'manual'
 type FibonacciTrend = 'UP' | 'DOWN'
 
-type DashboardSettings = {
+type LegacyDashboardSettings = {
+  timeframe?: Timeframe
+  scale?: ScaleMode
+  benchmarkTicker?: string
+  activeIndicator?: IndicatorTab
+  smaByTimeframe?: Record<Timeframe, number[]>
+  fibonacciMode?: FibonacciMode
+  fibonacciTrend?: FibonacciTrend
+  manualSwingLow?: string
+  manualSwingHigh?: string
+}
+
+type DashboardUiSettings = {
   timeframe: Timeframe
   scale: ScaleMode
   benchmarkTicker: string
   activeIndicator: IndicatorTab
-  smaByTimeframe: Record<Timeframe, number[]>
+  headerCollapsed: boolean
+  smaConfigsByTimeframe: Record<Timeframe, SmaConfig[]>
   fibonacciMode: FibonacciMode
   fibonacciTrend: FibonacciTrend
   manualSwingLow: string
   manualSwingHigh: string
 }
 
-const STORAGE_KEY = 'quant-viz:dashboard-settings:v3'
-const DEFAULT_SMA_BY_TIMEFRAME: Record<Timeframe, number[]> = {
+const STORAGE_KEY = 'quant-viz:dashboard-settings:v4'
+const LEGACY_STORAGE_KEY = 'quant-viz:dashboard-settings:v3'
+const DEFAULT_SMA_PERIODS: Record<Timeframe, number[]> = {
   daily: [5, 10, 20, 60, 120],
   weekly: [5, 10, 20, 30],
   monthly: [3, 6, 12],
 }
+const DEFAULT_SMA_COLORS = ['#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#10b981', '#f43f5e']
 
-const DEFAULT_SETTINGS: DashboardSettings = {
+const DEFAULT_SETTINGS: DashboardUiSettings = {
   timeframe: 'daily',
   scale: 'linear',
   benchmarkTicker: '069500',
   activeIndicator: 'rsi',
-  smaByTimeframe: DEFAULT_SMA_BY_TIMEFRAME,
+  headerCollapsed: true,
+  smaConfigsByTimeframe: buildDefaultSmaConfigsByTimeframe(),
   fibonacciMode: 'auto',
   fibonacciTrend: 'UP',
   manualSwingLow: '',
@@ -55,8 +71,8 @@ export default function Dashboard() {
   const [scale, setScale] = useState<ScaleMode>(storedSettings.scale)
   const [benchmarkTicker, setBenchmarkTicker] = useState(storedSettings.benchmarkTicker)
   const [activeIndicator, setActiveIndicator] = useState<IndicatorTab>(storedSettings.activeIndicator)
-  const [smaByTimeframe, setSmaByTimeframe] = useState<Record<Timeframe, number[]>>(storedSettings.smaByTimeframe)
-  const [smaInput, setSmaInput] = useState(storedSettings.smaByTimeframe[storedSettings.timeframe].join(','))
+  const [headerCollapsed, setHeaderCollapsed] = useState(storedSettings.headerCollapsed)
+  const [smaConfigsByTimeframe, setSmaConfigsByTimeframe] = useState<Record<Timeframe, SmaConfig[]>>(storedSettings.smaConfigsByTimeframe)
   const [fibonacciMode, setFibonacciMode] = useState<FibonacciMode>(storedSettings.fibonacciMode)
   const [fibonacciTrend, setFibonacciTrend] = useState<FibonacciTrend>(storedSettings.fibonacciTrend)
   const [manualSwingLow, setManualSwingLow] = useState(storedSettings.manualSwingLow)
@@ -69,7 +85,15 @@ export default function Dashboard() {
   const [showFibonacci, setShowFibonacci] = useState(true)
   const [showWeinstein, setShowWeinstein] = useState(true)
 
-  const smaPeriods = smaByTimeframe[timeframe]
+  const currentSmaConfigs = useMemo(
+    () => normalizeSmaConfigs(smaConfigsByTimeframe[timeframe], DEFAULT_SMA_PERIODS[timeframe]),
+    [smaConfigsByTimeframe, timeframe]
+  )
+  const visibleSmaPeriods = useMemo(
+    () => currentSmaConfigs.filter((config) => config.visible).map((config) => config.period),
+    [currentSmaConfigs]
+  )
+
   const parsedManualSwingLow = manualSwingLow.trim() === '' ? null : Number(manualSwingLow)
   const parsedManualSwingHigh = manualSwingHigh.trim() === '' ? null : Number(manualSwingHigh)
   const manualSwingLowValue = parsedManualSwingLow != null && Number.isFinite(parsedManualSwingLow) ? parsedManualSwingLow : null
@@ -80,12 +104,15 @@ export default function Dashboard() {
     loading: chartLoading,
     error: chartError,
     refetch: refetchChart,
+    fetchOlder,
+    isFetchingOlder,
+    hasMoreBefore,
   } = useChartData({
     ticker,
     timeframe,
     scale,
     enabled: ticker.length > 0,
-    smaPeriods,
+    smaPeriods: visibleSmaPeriods,
   })
 
   const indicatorsEnabled = ticker.length > 0 && !chartLoading && chartData?.ticker === ticker
@@ -100,6 +127,8 @@ export default function Dashboard() {
     ticker,
     enabled: indicatorsEnabled,
     benchmarkTicker,
+    startDate: chartData?.history.oldest_date ?? undefined,
+    endDate: chartData?.history.newest_date ?? undefined,
     fibonacciMode,
     fibonacciTrend,
     manualSwingLow: manualSwingLowValue,
@@ -121,12 +150,10 @@ export default function Dashboard() {
     ticker,
     benchmarkTicker,
     timeframe,
+    startDate: chartData?.history.oldest_date ?? undefined,
+    endDate: chartData?.history.newest_date ?? undefined,
     enabled: indicatorsEnabled,
   })
-
-  useEffect(() => {
-    setSmaInput((smaByTimeframe[timeframe] ?? DEFAULT_SMA_BY_TIMEFRAME[timeframe]).join(','))
-  }, [smaByTimeframe, timeframe])
 
   useEffect(() => {
     saveDashboardSettings({
@@ -134,7 +161,8 @@ export default function Dashboard() {
       scale,
       benchmarkTicker,
       activeIndicator,
-      smaByTimeframe,
+      headerCollapsed,
+      smaConfigsByTimeframe,
       fibonacciMode,
       fibonacciTrend,
       manualSwingLow,
@@ -145,21 +173,13 @@ export default function Dashboard() {
     benchmarkTicker,
     fibonacciMode,
     fibonacciTrend,
+    headerCollapsed,
     manualSwingHigh,
     manualSwingLow,
     scale,
-    smaByTimeframe,
+    smaConfigsByTimeframe,
     timeframe,
   ])
-
-  const handleSmaCommit = () => {
-    const parsed = parseSmaInput(smaInput, timeframe)
-    setSmaByTimeframe((current) => ({
-      ...current,
-      [timeframe]: parsed,
-    }))
-    setSmaInput(parsed.join(','))
-  }
 
   const handleForceRefreshData = async () => {
     if (!ticker || isSyncing) {
@@ -176,6 +196,13 @@ export default function Dashboard() {
     } finally {
       setIsSyncing(false)
     }
+  }
+
+  const handleSmaConfigsChange = (nextConfigs: SmaConfig[]) => {
+    setSmaConfigsByTimeframe((current) => ({
+      ...current,
+      [timeframe]: normalizeSmaConfigs(nextConfigs, DEFAULT_SMA_PERIODS[timeframe]),
+    }))
   }
 
   return (
@@ -206,7 +233,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             <select
               value={timeframe}
               onChange={(event) => setTimeframe(event.target.value as Timeframe)}
@@ -233,20 +260,6 @@ export default function Dashboard() {
               placeholder="BENCHMARK"
               className="rounded border border-gray-700 bg-[#1e222d] px-3 py-2 text-xs font-black uppercase outline-none focus:border-blue-500"
             />
-
-            <input
-              type="text"
-              value={smaInput}
-              onChange={(event) => setSmaInput(event.target.value)}
-              onBlur={handleSmaCommit}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  handleSmaCommit()
-                }
-              }}
-              placeholder="SMA 5,10,20"
-              className="rounded border border-gray-700 bg-[#1e222d] px-3 py-2 text-xs font-black uppercase outline-none focus:border-blue-500"
-            />
           </div>
         </div>
       </header>
@@ -263,7 +276,7 @@ export default function Dashboard() {
           <div className="space-y-6 lg:col-span-3">
             {chartData && (
               <div className="rounded-2xl border border-gray-800 bg-[#131722] p-6 shadow-2xl transition-all">
-                <div className="mb-8 flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
                   <div className="flex flex-col gap-3">
                     <div className="flex flex-wrap items-baseline gap-3">
                       <h2 className="text-4xl font-black tracking-tight">{chartData.name}</h2>
@@ -332,9 +345,11 @@ export default function Dashboard() {
                   <div>
                     <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">SMA Settings</div>
                     <div className="mt-2 text-sm text-gray-300">
-                      {timeframe.toUpperCase()} timeframe uses <span className="font-black text-white">{smaPeriods.join(', ')}</span>
+                      {timeframe.toUpperCase()} timeframe uses <span className="font-black text-white">
+                        {currentSmaConfigs.filter((config) => config.visible).map((config) => config.period).join(', ')}
+                      </span>
                     </div>
-                    <div className="mt-1 text-xs text-gray-500">Saved in localStorage per timeframe</div>
+                    <div className="mt-1 text-xs text-gray-500">Header collapse and SMA configs are saved in localStorage</div>
                   </div>
                   <div>
                     <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">Fibonacci Mode</div>
@@ -388,12 +403,19 @@ export default function Dashboard() {
                   weinstein={weinstein ?? undefined}
                   relativeStrength={relativeStrength}
                   scale={scale}
+                  smaConfigs={currentSmaConfigs}
+                  headerCollapsed={headerCollapsed}
+                  onToggleHeaderCollapsed={() => setHeaderCollapsed((current) => !current)}
+                  onSmaConfigsChange={handleSmaConfigsChange}
                   showSMA={showSMA}
                   showBollinger={showBollinger}
                   showDarvas={showDarvas}
                   showFibonacci={showFibonacci}
                   showWeinstein={showWeinstein}
                   activeIndicator={activeIndicator}
+                  onLoadOlder={fetchOlder}
+                  isFetchingOlder={isFetchingOlder}
+                  hasMoreBefore={hasMoreBefore}
                 />
               </div>
             )}
@@ -441,47 +463,117 @@ function ToggleChip({
   )
 }
 
-function loadDashboardSettings(): DashboardSettings {
+function buildDefaultSmaConfigs(periods: number[]) {
+  return periods.map((period, index) => ({
+    id: `sma-${period}-${index}`,
+    visible: true,
+    period,
+    color: DEFAULT_SMA_COLORS[index % DEFAULT_SMA_COLORS.length],
+    lineWidth: 2 as const,
+  }))
+}
+
+function buildDefaultSmaConfigsByTimeframe(): Record<Timeframe, SmaConfig[]> {
+  return {
+    daily: buildDefaultSmaConfigs(DEFAULT_SMA_PERIODS.daily),
+    weekly: buildDefaultSmaConfigs(DEFAULT_SMA_PERIODS.weekly),
+    monthly: buildDefaultSmaConfigs(DEFAULT_SMA_PERIODS.monthly),
+  }
+}
+
+function normalizeSmaConfigs(configs: SmaConfig[] | undefined, fallbackPeriods: number[]) {
+  const source = Array.isArray(configs) && configs.length > 0 ? configs : buildDefaultSmaConfigs(fallbackPeriods)
+  const normalized: SmaConfig[] = []
+  const seenPeriods = new Set<number>()
+
+  source.forEach((config, index) => {
+    const period = Math.min(240, Math.max(2, Math.round(config.period)))
+    if (seenPeriods.has(period)) {
+      return
+    }
+
+    seenPeriods.add(period)
+    normalized.push({
+      id: config.id || `sma-${period}-${index}`,
+      visible: config.visible !== false,
+      period,
+      color: config.color || DEFAULT_SMA_COLORS[index % DEFAULT_SMA_COLORS.length],
+      lineWidth: config.lineWidth && [1, 2, 3, 4].includes(config.lineWidth) ? config.lineWidth : 2,
+    })
+  })
+
+  if (normalized.length === 0) {
+    return buildDefaultSmaConfigs(fallbackPeriods)
+  }
+
+  return normalized
+    .sort((left, right) => left.period - right.period)
+    .slice(0, 6)
+}
+
+function migrateLegacySettings(legacy: LegacyDashboardSettings): DashboardUiSettings {
+  const migratedSmaConfigsByTimeframe = buildDefaultSmaConfigsByTimeframe()
+
+  if (legacy.smaByTimeframe) {
+    ;(['daily', 'weekly', 'monthly'] as const).forEach((timeframe) => {
+      const legacyPeriods = legacy.smaByTimeframe?.[timeframe]
+      if (legacyPeriods && legacyPeriods.length > 0) {
+        migratedSmaConfigsByTimeframe[timeframe] = buildDefaultSmaConfigs(legacyPeriods)
+      }
+    })
+  }
+
+  return {
+    timeframe: legacy.timeframe ?? DEFAULT_SETTINGS.timeframe,
+    scale: legacy.scale ?? DEFAULT_SETTINGS.scale,
+    benchmarkTicker: legacy.benchmarkTicker ?? DEFAULT_SETTINGS.benchmarkTicker,
+    activeIndicator: legacy.activeIndicator ?? DEFAULT_SETTINGS.activeIndicator,
+    headerCollapsed: true,
+    smaConfigsByTimeframe: migratedSmaConfigsByTimeframe,
+    fibonacciMode: legacy.fibonacciMode ?? DEFAULT_SETTINGS.fibonacciMode,
+    fibonacciTrend: legacy.fibonacciTrend ?? DEFAULT_SETTINGS.fibonacciTrend,
+    manualSwingLow: legacy.manualSwingLow ?? DEFAULT_SETTINGS.manualSwingLow,
+    manualSwingHigh: legacy.manualSwingHigh ?? DEFAULT_SETTINGS.manualSwingHigh,
+  }
+}
+
+function loadDashboardSettings(): DashboardUiSettings {
   if (typeof window === 'undefined') {
     return DEFAULT_SETTINGS
   }
 
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) {
-      return DEFAULT_SETTINGS
+    const current = window.localStorage.getItem(STORAGE_KEY)
+    if (current) {
+      const parsed = JSON.parse(current) as Partial<DashboardUiSettings>
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        smaConfigsByTimeframe: {
+          daily: normalizeSmaConfigs(parsed.smaConfigsByTimeframe?.daily, DEFAULT_SMA_PERIODS.daily),
+          weekly: normalizeSmaConfigs(parsed.smaConfigsByTimeframe?.weekly, DEFAULT_SMA_PERIODS.weekly),
+          monthly: normalizeSmaConfigs(parsed.smaConfigsByTimeframe?.monthly, DEFAULT_SMA_PERIODS.monthly),
+        },
+      }
     }
 
-    const parsed = JSON.parse(raw) as Partial<DashboardSettings>
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      smaByTimeframe: {
-        ...DEFAULT_SMA_BY_TIMEFRAME,
-        ...(parsed.smaByTimeframe ?? {}),
-      },
+    const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (legacy) {
+      return migrateLegacySettings(JSON.parse(legacy) as LegacyDashboardSettings)
     }
+
+    return DEFAULT_SETTINGS
   } catch {
     return DEFAULT_SETTINGS
   }
 }
 
-function saveDashboardSettings(settings: DashboardSettings) {
+function saveDashboardSettings(settings: DashboardUiSettings) {
   if (typeof window === 'undefined') {
     return
   }
 
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
-}
-
-function parseSmaInput(input: string, timeframe: Timeframe) {
-  const parsed = input
-    .split(',')
-    .map((value) => Number(value.trim()))
-    .filter((value) => Number.isFinite(value) && value >= 2 && value <= 240)
-
-  const unique = Array.from(new Set(parsed)).sort((left, right) => left - right)
-  return unique.length > 0 ? unique.slice(0, 6) : DEFAULT_SMA_BY_TIMEFRAME[timeframe]
 }
 
 function getWeinsteinStageColor(stage: number): string {

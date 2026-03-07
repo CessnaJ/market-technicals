@@ -59,6 +59,14 @@ class ChartDataPoint(BaseModel):
     volume: int
 
 
+class ChartHistoryMetadata(BaseModel):
+    """Metadata for the currently returned chart window"""
+    oldest_date: Optional[date] = None
+    newest_date: Optional[date] = None
+    has_more_before: bool = False
+    loaded_count: int = 0
+
+
 class ChartDataResponse(BaseModel):
     """Chart data response with OHLCV and indicators"""
     ticker: str
@@ -66,4 +74,5 @@ class ChartDataResponse(BaseModel):
     timeframe: str
     scale: str
     ohlcv: List[ChartDataPoint]
+    history: ChartHistoryMetadata
     indicators: Optional[dict] = None

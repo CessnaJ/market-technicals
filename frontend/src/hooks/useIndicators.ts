@@ -7,6 +7,8 @@ interface UseIndicatorsParams {
   ticker: string
   enabled?: boolean
   benchmarkTicker?: string
+  startDate?: string
+  endDate?: string
   fibonacciMode?: 'auto' | 'manual'
   fibonacciTrend?: 'UP' | 'DOWN'
   manualSwingLow?: number | null
@@ -17,6 +19,8 @@ export function useIndicators({
   ticker,
   enabled = true,
   benchmarkTicker = '069500',
+  startDate,
+  endDate,
   fibonacciMode = 'auto',
   fibonacciTrend = 'UP',
   manualSwingLow,
@@ -43,6 +47,17 @@ export function useIndicators({
     setError(null)
 
     try {
+      const weinsteinParams = new URLSearchParams()
+      if (benchmarkTicker) {
+        weinsteinParams.append('benchmark_ticker', benchmarkTicker)
+      }
+      if (startDate) {
+        weinsteinParams.append('start_date', startDate)
+      }
+      if (endDate) {
+        weinsteinParams.append('end_date', endDate)
+      }
+
       let fibonacciRequest: Promise<{ data: { fibonacci: FibonacciData | null } }>
       if (fibonacciMode === 'manual' && (manualSwingLow == null || manualSwingHigh == null)) {
         fibonacciRequest = Promise.resolve({ data: { fibonacci: null } })
@@ -62,7 +77,7 @@ export function useIndicators({
 
       const [weinsteinRes, darvasRes, fibRes, signalsRes] = await Promise.all([
         apiClient
-          .get<{ weinstein: WeinsteinData | null }>(`/indicators/${ticker}/weinstein?benchmark_ticker=${benchmarkTicker}`)
+          .get<{ weinstein: WeinsteinData | null }>(`/indicators/${ticker}/weinstein?${weinsteinParams.toString()}`)
           .catch(() => ({ data: { weinstein: null } })),
         apiClient
           .get<{ darvas_boxes: DarvasBox[] }>(`/indicators/${ticker}/darvas`)
@@ -90,7 +105,7 @@ export function useIndicators({
     } finally {
       setLoading(false)
     }
-  }, [benchmarkTicker, enabled, fibonacciMode, fibonacciTrend, manualSwingHigh, manualSwingLow, ticker])
+  }, [benchmarkTicker, enabled, endDate, fibonacciMode, fibonacciTrend, manualSwingHigh, manualSwingLow, startDate, ticker])
 
   useEffect(() => {
     if (!enabled || !ticker) {
@@ -103,7 +118,7 @@ export function useIndicators({
     }
 
     void fetchIndicators()
-  }, [enabled, ticker, fetchIndicators])
+  }, [enabled, endDate, startDate, ticker, fetchIndicators])
 
   return { weinstein, darvas, fibonacci, signals, loading, error, refetch: fetchIndicators }
 }

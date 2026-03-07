@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -114,6 +115,8 @@ async def _load_price_frame(
     timeframe: str,
     *,
     min_daily_records: int = 120,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
 ) -> tuple[object, pd.DataFrame]:
     stock = await market_data_service.ensure_stock_history(
         db,
@@ -126,14 +129,18 @@ async def _load_price_frame(
             detail=f"Stock {ticker} not found",
         )
 
-    limit = 160 if timeframe == "weekly" else 400
-    if timeframe == "monthly":
-        limit = 120
+    limit = None
+    if start_date is None and end_date is None:
+        limit = 160 if timeframe == "weekly" else 400
+        if timeframe == "monthly":
+            limit = 120
 
     points = await market_data_service.load_chart_points(
         db,
         stock.id,
         timeframe,
+        start_date=start_date,
+        end_date=end_date,
         limit=limit,
     )
     return stock, _points_to_dataframe(points)
@@ -143,9 +150,18 @@ async def _load_price_frame(
 async def get_weinstein_indicator(
     ticker: str,
     benchmark_ticker: Optional[str] = Query(DEFAULT_BENCHMARK_TICKER, description="Benchmark ticker for Mansfield RS"),
+    start_date: Optional[date] = Query(None, description="Start date aligned to chart window"),
+    end_date: Optional[date] = Query(None, description="End date aligned to chart window"),
     db: AsyncSession = Depends(get_db),
 ):
-    stock, df_weekly = await _load_price_frame(db, ticker, "weekly", min_daily_records=260)
+    stock, df_weekly = await _load_price_frame(
+        db,
+        ticker,
+        "weekly",
+        min_daily_records=260,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
     if df_weekly.empty or len(df_weekly) < 30:
         return {"weinstein": None}
@@ -164,6 +180,8 @@ async def get_weinstein_indicator(
                 benchmark_ticker,
                 "weekly",
                 min_daily_records=260,
+                start_date=start_date,
+                end_date=end_date,
             )
             benchmark_name = benchmark_stock.name
 
@@ -297,6 +315,8 @@ async def get_relative_strength(
     ticker: str,
     benchmark_ticker: str = Query(DEFAULT_BENCHMARK_TICKER, description="Benchmark ticker"),
     timeframe: str = Query("weekly", description="daily, weekly or monthly"),
+    start_date: Optional[date] = Query(None, description="Optional start date for aligned chart window"),
+    end_date: Optional[date] = Query(None, description="Optional end date for aligned chart window"),
     db: AsyncSession = Depends(get_db),
 ):
     if timeframe not in {"daily", "weekly", "monthly"}:
@@ -306,12 +326,21 @@ async def get_relative_strength(
         )
 
     min_daily_records = 320 if timeframe == "daily" else 260
-    stock, stock_df = await _load_price_frame(db, ticker, timeframe, min_daily_records=min_daily_records)
+    stock, stock_df = await _load_price_frame(
+        db,
+        ticker,
+        timeframe,
+        min_daily_records=min_daily_records,
+        start_date=start_date,
+        end_date=end_date,
+    )
     benchmark_stock, benchmark_df = await _load_price_frame(
         db,
         benchmark_ticker,
         timeframe,
         min_daily_records=min_daily_records,
+        start_date=start_date,
+        end_date=end_date,
     )
 
     if stock_df.empty or benchmark_df.empty:

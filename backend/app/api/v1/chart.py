@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker, get_db
 from app.models import Stock
-from app.schemas import ChartDataPoint, ChartDataResponse
+from app.schemas import ChartDataPoint, ChartDataResponse, ChartHistoryMetadata
 from app.services.market_data_service import market_data_service
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,11 @@ TIMEFRAME_LIMITS = {
     "daily": 365,
     "weekly": 104,
     "monthly": 60,
+}
+OLDER_HISTORY_LIMITS = {
+    "daily": 240,
+    "weekly": 120,
+    "monthly": 72,
 }
 MIN_POINTS_BY_TIMEFRAME = {
     "daily": 100,
@@ -78,6 +83,8 @@ async def get_chart_data(
     timeframe: str = Query("daily", description="Timeframe: daily, weekly or monthly"),
     start_date: Optional[date] = Query(None, description="Start date"),
     end_date: Optional[date] = Query(None, description="End date"),
+    before_date: Optional[date] = Query(None, description="Load history strictly before this date"),
+    limit: Optional[int] = Query(None, description="Maximum number of points to return"),
     scale: str = Query("linear", description="Scale: log or linear"),
     auto_fetch: bool = Query(True, description="Auto fetch data if not found"),
     force_refresh: bool = Query(False, description="Force refresh from KIS API"),
@@ -94,6 +101,9 @@ async def get_chart_data(
         )
 
     periods = _parse_sma_periods(sma_periods)
+    requested_limit = limit or (
+        OLDER_HISTORY_LIMITS[timeframe] if before_date else TIMEFRAME_LIMITS[timeframe]
+    )
 
     if auto_fetch:
         stock = await market_data_service.ensure_stock_history(
@@ -118,13 +128,17 @@ async def get_chart_data(
         timeframe,
         start_date=start_date,
         end_date=end_date,
-        limit=TIMEFRAME_LIMITS[timeframe],
+        before_date=before_date,
+        limit=requested_limit,
     )
 
     needs_refresh = (
-        not chart_data
-        or len(chart_data) < MIN_POINTS_BY_TIMEFRAME[timeframe]
-        or force_refresh
+        before_date is None
+        and (
+            not chart_data
+            or len(chart_data) < MIN_POINTS_BY_TIMEFRAME[timeframe]
+            or force_refresh
+        )
     )
 
     if needs_refresh and auto_fetch:
@@ -155,7 +169,43 @@ async def get_chart_data(
             timeframe,
             start_date=start_date,
             end_date=end_date,
-            limit=TIMEFRAME_LIMITS[timeframe],
+            before_date=before_date,
+            limit=requested_limit,
+        )
+
+    if before_date is not None and auto_fetch and len(chart_data) < requested_limit:
+        await market_data_service.fetch_history_before(
+            db,
+            ticker,
+            stock.id,
+            timeframe,
+            before_date=before_date,
+            required_points=requested_limit,
+        )
+        chart_data = await market_data_service.load_chart_points(
+            db,
+            stock.id,
+            timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            before_date=before_date,
+            limit=requested_limit,
+        )
+
+    if not chart_data and before_date is not None:
+        return ChartDataResponse(
+            ticker=ticker,
+            name=stock.name,
+            timeframe=timeframe,
+            scale=scale,
+            ohlcv=[],
+            history=ChartHistoryMetadata(
+                oldest_date=None,
+                newest_date=None,
+                has_more_before=False,
+                loaded_count=0,
+            ),
+            indicators={},
         )
 
     if not chart_data:
@@ -165,6 +215,14 @@ async def get_chart_data(
         )
 
     indicators = await _calculate_basic_indicators(chart_data, sma_periods=periods)
+    oldest_date = chart_data[0].date
+    newest_date = chart_data[-1].date
+    has_more_before = await market_data_service.has_points_before(
+        db,
+        stock.id,
+        timeframe,
+        oldest_date,
+    )
 
     return ChartDataResponse(
         ticker=ticker,
@@ -172,6 +230,12 @@ async def get_chart_data(
         timeframe=timeframe,
         scale=scale,
         ohlcv=chart_data,
+        history=ChartHistoryMetadata(
+            oldest_date=oldest_date,
+            newest_date=newest_date,
+            has_more_before=has_more_before,
+            loaded_count=len(chart_data),
+        ),
         indicators=indicators,
     )
 

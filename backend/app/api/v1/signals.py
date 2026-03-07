@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 import logging
+import math
 
 from fastapi import APIRouter, Depends, Query
 import pandas as pd
@@ -18,6 +20,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/signals", tags=["signals"])
 
 detector = SignalDetector()
+
+
+def _json_safe(value):
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+
+    if isinstance(value, Decimal):
+        return float(value)
+
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+
+    if isinstance(value, date):
+        return value.isoformat()
+
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return _json_safe(value.item())
+        except Exception:  # pragma: no cover - defensive fallback
+            return str(value)
+
+    return value
 
 
 def _records_to_dataframe(records: list, date_field: str) -> pd.DataFrame:
@@ -65,8 +98,8 @@ def _build_signals(df_daily: pd.DataFrame, df_weekly: pd.DataFrame, limit: int) 
                     direction=direction,
                     strength=float(breakout_result.get("confidence", 0.0)),
                     details={
-                        "checklist": breakout_result.get("checklist", {}),
-                        "warnings": breakout_result.get("warnings", []),
+                        "checklist": _json_safe(breakout_result.get("checklist", {})),
+                        "warnings": _json_safe(breakout_result.get("warnings", [])),
                     },
                 )
             )
@@ -82,9 +115,9 @@ def _build_signals(df_daily: pd.DataFrame, df_weekly: pd.DataFrame, limit: int) 
                 direction=divergence.get("type", "WARNING"),
                 strength=float(strength) if strength is not None else None,
                 details={
-                    "weinstein_stage": divergence.get("weinstein_stage"),
-                    "stage_label": divergence.get("stage_label"),
-                    "significance": divergence.get("significance"),
+                    "weinstein_stage": _json_safe(divergence.get("weinstein_stage")),
+                    "stage_label": _json_safe(divergence.get("stage_label")),
+                    "significance": _json_safe(divergence.get("significance")),
                 },
             )
         )
