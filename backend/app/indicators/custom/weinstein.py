@@ -1,6 +1,6 @@
+from typing import Any, Dict
+
 import pandas as pd
-import numpy as np
-from typing import Dict, Any
 from app.indicators.basic.moving_average import MovingAverages
 
 
@@ -20,6 +20,53 @@ class WeinsteinAnalysis:
     """
 
     WEEKLY_MA_PERIOD = 30  # 30-week SMA
+    STRONG_SLOPE_PCT = 1.5
+    FLAT_SLOPE_PCT = 0.6
+    ABOVE_MA_BUFFER_PCT = 2.0
+    NEAR_MA_BUFFER_PCT = 2.5
+
+    STAGE_DEFINITIONS = {
+        1: {
+            "label": "ACCUMULATION",
+            "title": "Stage 1: Accumulation",
+            "summary": "30주선이 평탄해지거나 완만하게 돌아서며, 가격이 이동평균 부근에서 바닥을 다지는 구간입니다.",
+            "checklist": [
+                "가격이 30주선 부근에서 횡보합니다.",
+                "하락 추세의 탄력이 약해집니다.",
+                "추세 전환 전 준비 구간으로 해석합니다.",
+            ],
+        },
+        2: {
+            "label": "MARKUP",
+            "title": "Stage 2: Markup",
+            "summary": "가격이 30주선 위에서 유지되고, 30주선이 의미 있게 상승하는 추세 주도 구간입니다.",
+            "checklist": [
+                "가격이 30주선 위를 유지합니다.",
+                "30주선 기울기가 상승 방향입니다.",
+                "상대강도와 추세 지속 여부를 우선 확인합니다.",
+            ],
+        },
+        3: {
+            "label": "DISTRIBUTION",
+            "title": "Stage 3: Distribution",
+            "summary": "상승 추세가 둔화되며 30주선이 평탄해지고, 가격이 상단에서 분배 양상을 보일 수 있는 구간입니다.",
+            "checklist": [
+                "가격이 30주선 위 또는 부근에서 흔들립니다.",
+                "30주선 상승 기울기가 둔화됩니다.",
+                "돌파 실패와 거래량 분산을 경계합니다.",
+            ],
+        },
+        4: {
+            "label": "MARKDOWN",
+            "title": "Stage 4: Markdown",
+            "summary": "가격이 30주선 아래에서 머무르고, 30주선이 하락하는 하락 추세 구간입니다.",
+            "checklist": [
+                "가격이 30주선 아래에 위치합니다.",
+                "30주선 기울기가 하락 방향입니다.",
+                "반등보다 추세 전환 확인을 우선합니다.",
+            ],
+        },
+    }
 
     def __init__(self, benchmark_ticker: str = "0001"):
         self.benchmark_ticker = benchmark_ticker
@@ -43,54 +90,47 @@ class WeinsteinAnalysis:
         ma_30w = MovingAverages.sma(close, self.WEEKLY_MA_PERIOD)
 
         # Calculate MA slope
-        ma_slope = self._calculate_slope(ma_30w)
+        ma_slope_pct = self._calculate_slope_pct(ma_30w)
+        ma_slope = self._categorize_slope(ma_slope_pct)
+        distance_to_ma = ((close - ma_30w) / ma_30w) * 100
 
         # Determine stage
-        stage = self._determine_stage(close, ma_30w, ma_slope)
+        stage = self._determine_stage(close, ma_30w, ma_slope_pct)
 
         # Calculate stage labels
-        # stage_labels = self._get_stage_labels(stage) # FIXME: 삭제
         stage_labels = stage.apply(self._get_stage_labels)
 
         return {
             "ma_30w": ma_30w,
             "ma_slope": ma_slope,
+            "ma_slope_pct": ma_slope_pct,
+            "distance_to_ma": distance_to_ma,
             "stage": stage,
             "stage_label": stage_labels,
         }
 
-    def _calculate_slope(self, ma_series: pd.Series, window: int = 4) -> pd.Series:
-        """
-        Calculate MA slope
+    def _calculate_slope_pct(self, ma_series: pd.Series, window: int = 4) -> pd.Series:
+        base = ma_series.shift(window)
+        return ((ma_series - base) / base) * 100
 
-        Returns:
-            Series with slope values (RISING, FALLING, FLAT)
-        """
-        slopes = pd.Series(index=ma_series.index, dtype=object)
-
-        for i in range(window, len(ma_series)):
-            recent = ma_series.iloc[i - window : i]
-            if len(recent) < 2:
-                slopes.iloc[i] = "FLAT"
-                continue
-
-            # Calculate slope
-            slope = (recent.iloc[-1] - recent.iloc[0]) / len(recent)
-
-            if slope > 0.001:  # Threshold for rising
-                slopes.iloc[i] = "RISING"
-            elif slope < -0.001:  # Threshold for falling
-                slopes.iloc[i] = "FALLING"
+    def _categorize_slope(self, slope_pct: pd.Series) -> pd.Series:
+        slopes = pd.Series(index=slope_pct.index, dtype=object)
+        for index, value in slope_pct.items():
+            if pd.isna(value):
+                slopes.loc[index] = None
+            elif value >= self.FLAT_SLOPE_PCT:
+                slopes.loc[index] = "RISING"
+            elif value <= -self.FLAT_SLOPE_PCT:
+                slopes.loc[index] = "FALLING"
             else:
-                slopes.iloc[i] = "FLAT"
-
+                slopes.loc[index] = "FLAT"
         return slopes
 
     def _determine_stage(
         self,
         close: pd.Series,
         ma: pd.Series,
-        slope: pd.Series,
+        slope_pct: pd.Series,
     ) -> pd.Series:
         """
         Determine Weinstein stage
@@ -98,7 +138,7 @@ class WeinsteinAnalysis:
         Args:
             close: Close price series
             ma: Moving average series
-            slope: MA slope series
+            slope_pct: MA slope in percent
 
         Returns:
             Series with stage values (1, 2, 3, 4)
@@ -106,33 +146,50 @@ class WeinsteinAnalysis:
         stages = pd.Series(index=close.index, dtype=int)
 
         for i in range(len(close)):
-            if pd.isna(ma.iloc[i]) or pd.isna(slope.iloc[i]):
+            if pd.isna(ma.iloc[i]) or pd.isna(slope_pct.iloc[i]):
                 stages.iloc[i] = 0
                 continue
 
-            price_above_ma = close.iloc[i] > ma.iloc[i]
-            ma_rising = slope.iloc[i] == "RISING"
+            relative_to_ma = ((close.iloc[i] - ma.iloc[i]) / ma.iloc[i]) * 100
+            slope_value = slope_pct.iloc[i]
 
-            if ma_rising and price_above_ma:
-                stages.iloc[i] = 2  # ADVANCING
-            elif ma_rising and not price_above_ma:
-                stages.iloc[i] = 3  # TOPPING
-            elif not ma_rising and not price_above_ma:
-                stages.iloc[i] = 4  # DECLINING
+            if (
+                slope_value >= self.STRONG_SLOPE_PCT
+                and relative_to_ma >= self.ABOVE_MA_BUFFER_PCT
+            ):
+                stages.iloc[i] = 2
+            elif (
+                slope_value <= -self.STRONG_SLOPE_PCT
+                and relative_to_ma <= -self.ABOVE_MA_BUFFER_PCT
+            ):
+                stages.iloc[i] = 4
+            elif relative_to_ma >= 0:
+                stages.iloc[i] = 3
             else:
-                stages.iloc[i] = 1  # BASING
+                stages.iloc[i] = 1
+
+            if (
+                abs(relative_to_ma) <= self.NEAR_MA_BUFFER_PCT
+                and abs(slope_value) <= self.FLAT_SLOPE_PCT
+            ):
+                stages.iloc[i] = 3 if relative_to_ma >= 0 else 1
 
         return stages
 
     def _get_stage_labels(self, stage: int) -> str:
         """Get stage label from stage number"""
-        labels = {
-            1: "BASING",
-            2: "ADVANCING",
-            3: "TOPPING",
-            4: "DECLINING",
-        }
-        return labels.get(stage, "UNKNOWN")
+        return self.STAGE_DEFINITIONS.get(stage, {}).get("label", "UNKNOWN")
+
+    def describe_stage(self, stage: int) -> Dict[str, Any]:
+        return self.STAGE_DEFINITIONS.get(
+            stage,
+            {
+                "label": "UNKNOWN",
+                "title": "Stage Unknown",
+                "summary": "충분한 데이터가 없어 Weinstein Stage를 해석할 수 없습니다.",
+                "checklist": ["30주 이상 데이터가 필요한지 확인합니다."],
+            },
+        )
 
     def detect_breakout(self, df: pd.DataFrame) -> Dict[str, Any]:
         """

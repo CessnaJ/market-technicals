@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date, timedelta
 import logging
 from typing import Optional
@@ -8,12 +10,45 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker, get_db
-from app.models import OHLCDaily, OHLCWeekly, Stock
+from app.models import Stock
 from app.schemas import ChartDataPoint, ChartDataResponse
+from app.services.market_data_service import market_data_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chart", tags=["chart"])
+
+DEFAULT_SMA_PERIODS = [5, 10, 20, 60, 120]
+TIMEFRAME_LIMITS = {
+    "daily": 365,
+    "weekly": 104,
+    "monthly": 60,
+}
+MIN_POINTS_BY_TIMEFRAME = {
+    "daily": 100,
+    "weekly": 30,
+    "monthly": 12,
+}
+
+
+def _parse_sma_periods(raw_value: Optional[str]) -> list[int]:
+    if not raw_value:
+        return DEFAULT_SMA_PERIODS
+
+    parsed: list[int] = []
+    for chunk in raw_value.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            value = int(chunk)
+        except ValueError:
+            continue
+
+        if 2 <= value <= 240 and value not in parsed:
+            parsed.append(value)
+
+    return sorted(parsed)[:6] or DEFAULT_SMA_PERIODS
 
 
 async def background_fetch_full_history(ticker: str, stock_id: int):
@@ -22,8 +57,12 @@ async def background_fetch_full_history(ticker: str, stock_id: int):
 
     async with async_session_maker() as db:
         try:
-            logger.info("🚀 [%s] 백그라운드 1년치 풀데이터 수집 시작...", ticker)
-            full_data = await kis_price_service.get_daily_price(ticker, use_cache=False)
+            logger.info("🚀 [%s] 백그라운드 2년치 풀데이터 수집 시작...", ticker)
+            full_data = await kis_price_service.get_daily_price(
+                ticker,
+                start_date=date.today() - timedelta(days=730),
+                use_cache=False,
+            )
             if full_data:
                 await data_service.save_ohlcv_daily(db, stock_id, full_data)
                 await data_service.convert_daily_to_weekly(db, stock_id)
@@ -32,110 +71,67 @@ async def background_fetch_full_history(ticker: str, stock_id: int):
             logger.error("❌[%s] 백그라운드 수집 에러: %s", ticker, exc)
 
 
-async def _load_chart_data(
-    db: AsyncSession,
-    stock_id: int,
-    timeframe: str,
-    start_date: Optional[date],
-    end_date: Optional[date],
-) -> list[ChartDataPoint]:
-    if timeframe == "weekly":
-        query = (
-            select(OHLCWeekly)
-            .where(OHLCWeekly.stock_id == stock_id)
-            .order_by(OHLCWeekly.week_start.desc())
-        )
-        if start_date:
-            query = query.where(OHLCWeekly.week_start >= start_date)
-        if end_date:
-            query = query.where(OHLCWeekly.week_start <= end_date)
-        query = query.limit(365)
-        result = await db.execute(query)
-        records = result.scalars().all()
-        return [
-            ChartDataPoint(
-                date=record.week_start,
-                open=float(record.open),
-                high=float(record.high),
-                low=float(record.low),
-                close=float(record.close),
-                volume=int(record.volume),
-            )
-            for record in records
-        ]
-
-    query = (
-        select(OHLCDaily)
-        .where(OHLCDaily.stock_id == stock_id)
-        .order_by(OHLCDaily.date.desc())
-    )
-    if start_date:
-        query = query.where(OHLCDaily.date >= start_date)
-    if end_date:
-        query = query.where(OHLCDaily.date <= end_date)
-    query = query.limit(365)
-    result = await db.execute(query)
-    records = result.scalars().all()
-    return [
-        ChartDataPoint(
-            date=record.date,
-            open=float(record.open),
-            high=float(record.high),
-            low=float(record.low),
-            close=float(record.close),
-            volume=int(record.volume),
-        )
-        for record in records
-    ]
-
-
 @router.get("/{ticker}", response_model=ChartDataResponse)
 async def get_chart_data(
     ticker: str,
     background_tasks: BackgroundTasks,
-    timeframe: str = Query("daily", description="Timeframe: daily or weekly"),
+    timeframe: str = Query("daily", description="Timeframe: daily, weekly or monthly"),
     start_date: Optional[date] = Query(None, description="Start date"),
     end_date: Optional[date] = Query(None, description="End date"),
     scale: str = Query("linear", description="Scale: log or linear"),
     auto_fetch: bool = Query(True, description="Auto fetch data if not found"),
     force_refresh: bool = Query(False, description="Force refresh from KIS API"),
+    sma_periods: Optional[str] = Query(None, description="Comma-separated SMA periods"),
     db: AsyncSession = Depends(get_db),
 ):
     from app.services.data_service import data_service
     from app.services.kis_api.price import kis_price_service
 
-    result = await db.execute(select(Stock).where(Stock.ticker == ticker))
-    stock = result.scalar_one_or_none()
-
-    if not stock:
-        if not auto_fetch:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Stock {ticker} not found",
-            )
-
-        current_price = await kis_price_service.get_current_price(ticker)
-        if not current_price:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Stock {ticker} not found",
-            )
-
-        stock = await data_service.get_or_create_stock(
-            db,
-            ticker=ticker,
-            name=current_price.get("name", ticker),
-            market=current_price.get("market"),
+    if timeframe not in {"daily", "weekly", "monthly"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="timeframe must be one of: daily, weekly, monthly",
         )
 
-    chart_data = await _load_chart_data(db, stock.id, timeframe, start_date, end_date)
+    periods = _parse_sma_periods(sma_periods)
 
-    if (not chart_data or len(chart_data) < 100 or force_refresh) and auto_fetch:
-        logger.info("🐤 [%s] 데이터 부족 - 최근 데이터 선행 수집 및 백그라운드 1년치 수집", ticker)
-        quick_start_date = date.today() - timedelta(days=150)
+    if auto_fetch:
+        stock = await market_data_service.ensure_stock_history(
+            db,
+            ticker,
+            force_refresh=False,
+            min_daily_records=MIN_POINTS_BY_TIMEFRAME["daily"],
+        )
+    else:
+        result = await db.execute(select(Stock).where(Stock.ticker == ticker))
+        stock = result.scalar_one_or_none()
+
+    if stock is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Stock {ticker} not found",
+        )
+
+    chart_data = await market_data_service.load_chart_points(
+        db,
+        stock.id,
+        timeframe,
+        start_date=start_date,
+        end_date=end_date,
+        limit=TIMEFRAME_LIMITS[timeframe],
+    )
+
+    needs_refresh = (
+        not chart_data
+        or len(chart_data) < MIN_POINTS_BY_TIMEFRAME[timeframe]
+        or force_refresh
+    )
+
+    if needs_refresh and auto_fetch:
+        logger.info("🐤 [%s] 데이터 부족 - 최근 데이터 선행 수집 및 백그라운드 보강", ticker)
         recent_data = await kis_price_service.get_daily_price(
             ticker=ticker,
-            start_date=quick_start_date,
+            start_date=date.today() - timedelta(days=400),
             use_cache=not force_refresh,
         )
 
@@ -153,7 +149,14 @@ async def get_chart_data(
         )
         await data_service.convert_daily_to_weekly(db, stock.id)
         background_tasks.add_task(background_fetch_full_history, ticker, stock.id)
-        chart_data = await _load_chart_data(db, stock.id, timeframe, start_date, end_date)
+        chart_data = await market_data_service.load_chart_points(
+            db,
+            stock.id,
+            timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            limit=TIMEFRAME_LIMITS[timeframe],
+        )
 
     if not chart_data:
         raise HTTPException(
@@ -161,8 +164,7 @@ async def get_chart_data(
             detail=f"No data for {ticker}",
         )
 
-    chart_data.sort(key=lambda item: item.date)
-    indicators = await _calculate_basic_indicators(chart_data)
+    indicators = await _calculate_basic_indicators(chart_data, sma_periods=periods)
 
     return ChartDataResponse(
         ticker=ticker,
@@ -174,9 +176,14 @@ async def get_chart_data(
     )
 
 
-async def _calculate_basic_indicators(data: list[ChartDataPoint]) -> dict:
+async def _calculate_basic_indicators(
+    data: list[ChartDataPoint],
+    sma_periods: Optional[list[int]] = None,
+) -> dict:
     if not data:
         return {}
+
+    periods = sma_periods or DEFAULT_SMA_PERIODS
 
     df = pd.DataFrame(
         [
@@ -192,7 +199,6 @@ async def _calculate_basic_indicators(data: list[ChartDataPoint]) -> dict:
         ]
     ).sort_values("date").reset_index(drop=True)
 
-    periods = [5, 10, 20, 60, 120]
     sma_values: dict[str, list[dict[str, float | date]]] = {}
     for period in periods:
         sma_series = df["close"].rolling(window=period).mean()

@@ -5,12 +5,13 @@ import { ChartDataResponse } from '../types'
 
 interface UseChartDataParams {
   ticker: string
-  timeframe?: 'daily' | 'weekly'
+  timeframe?: 'daily' | 'weekly' | 'monthly'
   scale?: 'linear' | 'log'
   enabled?: boolean
   startDate?: string
   endDate?: string
   forceRefresh?: boolean
+  smaPeriods?: number[]
 }
 
 export function useChartData({
@@ -21,6 +22,7 @@ export function useChartData({
   startDate,
   endDate,
   forceRefresh,
+  smaPeriods,
 }: UseChartDataParams) {
   const [data, setData] = useState<ChartDataResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -40,6 +42,7 @@ export function useChartData({
       if (startDate) params.append('start_date', startDate)
       if (endDate) params.append('end_date', endDate)
       if (forceRefresh) params.append('force_refresh', 'true')
+      if (smaPeriods && smaPeriods.length > 0) params.append('sma_periods', smaPeriods.join(','))
 
       const response = await apiClient.get<ChartDataResponse>(`/chart/${ticker}?${params.toString()}`)
       setData(response.data)
@@ -51,7 +54,7 @@ export function useChartData({
     } finally {
       setLoading(false)
     }
-  }, [ticker, timeframe, scale, startDate, endDate, forceRefresh])
+  }, [ticker, timeframe, scale, startDate, endDate, forceRefresh, smaPeriods])
 
   useEffect(() => {
     if (!enabled || !ticker) {

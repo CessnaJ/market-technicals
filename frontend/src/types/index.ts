@@ -49,16 +49,51 @@ export interface FibonacciLevel {
 }
 
 export interface FibonacciData {
+  mode?: 'auto' | 'manual';
+  trend?: 'UP' | 'DOWN';
   swing_low: number;
   swing_high: number;
   levels: Record<string, number>;
+  extensions?: Record<string, number>;
+}
+
+export interface StageDescription {
+  label: string;
+  title: string;
+  summary: string;
+  checklist: string[];
+}
+
+export interface StageHistoryPoint {
+  date: string;
+  stage: number;
+  stage_label: string;
+  close: number;
+  ma_30w: number | null;
+  slope: 'RISING' | 'FALLING' | 'FLAT' | null;
+  slope_pct: number | null;
+  distance_to_ma: number | null;
+  mansfield_rs: number | null;
+}
+
+export interface StageTransition {
+  date: string;
+  from_stage: number;
+  to_stage: number;
+  label: string;
 }
 
 export interface WeinsteinData {
+  ticker?: string;
   current_stage: number;
   stage_label: string;
   ma_30w: number | null;
   mansfield_rs: number | null;
+  benchmark_ticker?: string | null;
+  benchmark_name?: string | null;
+  description?: StageDescription;
+  stage_history?: StageHistoryPoint[];
+  transitions?: StageTransition[];
 }
 
 export interface Signal {
@@ -73,12 +108,31 @@ export interface FinancialMetrics {
   ticker: string;
   name: string;
   period_date: string | null;
-  psr?: number;
-  per?: number;
-  pbr?: number;
-  roe?: number;
-  debt_ratio?: number;
-  market_cap?: number;
+  psr?: number | null;
+  per?: number | null;
+  pbr?: number | null;
+  roe?: number | null;
+  debt_ratio?: number | null;
+  market_cap?: number | null;
+}
+
+export interface RelativeStrengthPoint {
+  date: string;
+  stock_performance: number;
+  benchmark_performance: number;
+  relative_spread: number;
+  relative_ratio: number;
+  mansfield_rs: number | null;
+}
+
+export interface RelativeStrengthData {
+  ticker: string;
+  benchmark_ticker: string;
+  benchmark_name: string;
+  timeframe: 'daily' | 'weekly' | 'monthly';
+  current_relative_return: number;
+  current_mansfield_rs: number | null;
+  series: RelativeStrengthPoint[];
 }
 
 export interface ChartDataResponse {
