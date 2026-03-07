@@ -130,9 +130,21 @@ class VPCI:
             Dictionary with false breakout detection result
         """
         # Find the breakout date index
-        breakout_idx = df.index.get_loc(breakout_date)
+        try:
+            breakout_idx = df.index.get_loc(breakout_date)
+        except KeyError:
+            return {
+                "is_false": False,
+                "confidence": 0.0,
+                "reason": "Breakout date not found",
+            }
 
-        if breakout_idx is None or breakout_idx < self.long_period:
+        if isinstance(breakout_idx, slice):
+            breakout_idx = breakout_idx.stop - 1
+        elif isinstance(breakout_idx, np.ndarray):
+            breakout_idx = int(breakout_idx[-1])
+
+        if breakout_idx is None or breakout_idx < self.long_period or breakout_idx < 1:
             return {
                 "is_false": False,
                 "confidence": 0.0,

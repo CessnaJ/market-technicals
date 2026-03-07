@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
 from app.indicators.custom.vpci import VPCI
 from app.indicators.custom.weinstein import WeinsteinAnalysis
@@ -137,6 +137,7 @@ class SignalDetector:
     def detect_divergence(
         self,
         df_daily: pd.DataFrame,
+        df_weekly: Optional[pd.DataFrame] = None,
         window: int = 20,
     ) -> List[Dict[str, Any]]:
         """
@@ -154,14 +155,21 @@ class SignalDetector:
         """
         divergences = self.vpci.detect_divergence(df_daily, window)
 
-        # Add Weinstein context
-        weinstein_result = self.weinstein.analyze(df_daily)
-        current_stage = weinstein_result.get("stage")
+        current_stage = None
+        stage_label = None
+        if df_weekly is not None and len(df_weekly) >= self.weinstein.WEEKLY_MA_PERIOD:
+            weinstein_result = self.weinstein.analyze(df_weekly)
+            stage_series = weinstein_result.get("stage")
+            stage_label_series = weinstein_result.get("stage_label")
+            if stage_series is not None and len(stage_series) > 0:
+                current_stage = int(stage_series.iloc[-1])
+            if stage_label_series is not None and len(stage_label_series) > 0:
+                stage_label = str(stage_label_series.iloc[-1])
 
         # Enhance with stage context
         for div in divergences:
             div["weinstein_stage"] = current_stage
-            div["stage_label"] = weinstein_result.get("stage_label")
+            div["stage_label"] = stage_label
 
             # Only consider bearish divergences in Stage 2 (Advancing) as warnings
             if div["type"] == "BEARISH" and current_stage == 2:
@@ -187,7 +195,7 @@ class SignalDetector:
             Dictionary with all false signal analysis
         """
         # Detect divergences
-        divergences = self.detect_divergence(df_daily)
+        divergences = self.detect_divergence(df_daily, df_weekly=df_weekly)
 
         # Count by type
         bearish_count = sum(1 for d in divergences if d["type"] == "BEARISH")

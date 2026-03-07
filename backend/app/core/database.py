@@ -19,6 +19,7 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False,
 )
+async_session_maker = AsyncSessionLocal
 
 # Base class for models
 Base = declarative_base()

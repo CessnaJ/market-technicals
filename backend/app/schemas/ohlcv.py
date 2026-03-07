@@ -52,10 +52,10 @@ class OHLCWeekly(OHLCWeeklyBase):
 class ChartDataPoint(BaseModel):
     """Single data point for chart"""
     date: date
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
+    open: float
+    high: float
+    low: float
+    close: float
     volume: int
 
 
@@ -67,6 +67,3 @@ class ChartDataResponse(BaseModel):
     scale: str
     ohlcv: List[ChartDataPoint]
     indicators: Optional[dict] = None
-    weinstein: Optional[dict] = None
-    darvas_boxes: Optional[List[dict]] = None
-    signals: Optional[List[dict]] = None

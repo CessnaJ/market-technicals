@@ -38,12 +38,10 @@ class FinancialMetrics(BaseModel):
     """Financial metrics summary for dashboard"""
     ticker: str
     name: str
-    psr: Optional[Decimal] = None
-    per: Optional[Decimal] = None
-    pbr: Optional[Decimal] = None
-    roe: Optional[Decimal] = None
-    debt_ratio: Optional[Decimal] = None
-    market_cap: Optional[Decimal] = None
-    revenue: Optional[Decimal] = None
-    operating_income: Optional[Decimal] = None
-    net_income: Optional[Decimal] = None
+    period_date: Optional[date] = None
+    psr: Optional[float] = None
+    per: Optional[float] = None
+    pbr: Optional[float] = None
+    roe: Optional[float] = None
+    debt_ratio: Optional[float] = None
+    market_cap: Optional[float] = None

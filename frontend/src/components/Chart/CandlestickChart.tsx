@@ -32,8 +32,6 @@ interface CandlestickChartProps {
   showFibonacci: boolean
   showWeinstein: boolean
   activeIndicator: 'rsi' | 'macd' | 'vpci'
-  onLoadMore?: () => void;
-  isRefetching?: boolean; 
 }
 
 export default function CandlestickChart({
@@ -49,8 +47,6 @@ export default function CandlestickChart({
   showFibonacci,
   showWeinstein,
   activeIndicator,
-  onLoadMore,     
-  isRefetching,   
 }: CandlestickChartProps) {
   // --- Refs ---
   const mainContainerRef = useRef<HTMLDivElement>(null)
@@ -66,8 +62,6 @@ export default function CandlestickChart({
   const fibonacciSeriesRefs = useRef<ISeriesApi<"Line">[]>([])
   const weinsteinSeriesRef = useRef<ISeriesApi<"Area"> | null>(null)
   const bottomSeriesRefs = useRef<ISeriesApi<any>[]>([])
-
-  const fetchThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 1. 차트 초기화
   useEffect(() => {
@@ -133,23 +127,7 @@ export default function CandlestickChart({
     }
   }, [])
 
-  // 2. 스크롤 트리거
-  useEffect(() => {
-    if (!mainChartRef.current || !onLoadMore) return
-    const handleRangeChange = (logicalRange: LogicalRange | null) => {
-      if (logicalRange && logicalRange.from < 15 && !isRefetching) {
-        if (fetchThrottleRef.current) return
-        fetchThrottleRef.current = setTimeout(() => {
-          onLoadMore()
-          fetchThrottleRef.current = null
-        }, 1500)
-      }
-    }
-    mainChartRef.current.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange)
-    return () => mainChartRef.current?.timeScale().unsubscribeVisibleLogicalRangeChange(handleRangeChange)
-  }, [onLoadMore, isRefetching])
-
-  // 3. 데이터 업데이트 통합 로직
+  // 2. 데이터 업데이트 통합 로직
   useEffect(() => {
     if (!mainChartRef.current || !indicatorChartRef.current || !candlestickSeriesRef.current) return
 
@@ -286,11 +264,6 @@ export default function CandlestickChart({
 
   return (
     <div className="flex flex-col gap-2 w-full relative">
-      {isRefetching && (
-        <div className="absolute top-4 left-4 z-20 bg-blue-600/90 backdrop-blur-md text-[10px] font-bold text-white px-3 py-1 rounded-full shadow-2xl animate-pulse">
-          HISTORICAL DATA SYNCING...
-        </div>
-      )}
       <div ref={mainContainerRef} className="w-full bg-[#131722] rounded-t-xl border-x border-t border-gray-800 overflow-hidden shadow-2xl" />
       <div ref={indicatorContainerRef} className="w-full bg-[#131722] rounded-b-xl border border-gray-800 overflow-hidden shadow-2xl" />
     </div>

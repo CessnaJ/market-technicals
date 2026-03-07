@@ -1,37 +1,32 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+import logging
+
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
-from datetime import date
 
 from app.core.database import get_db
-from app.models import Stock
-from app.services.kis_api.price import kis_price_service
-from app.services.data_service import data_service
 from app.core.redis_client import redis_client
-import logging
+from app.models import Watchlist
+from app.services.data_service import data_service
+from app.services.kis_api.price import kis_price_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/fetch", tags=["fetch"])
 
 
+class FetchStockRequest(BaseModel):
+    force_refresh: bool = False
+
+
 @router.post("/{ticker}")
 async def fetch_stock_data(
     ticker: str,
-    force_refresh: bool = False,
+    payload: FetchStockRequest = Body(default_factory=FetchStockRequest),
     db: AsyncSession = Depends(get_db),
-    background_tasks: BackgroundTasks = None,
-    ):
-    """
-    Fetch data for a specific stock from KIS API
-
-    Args:
-        ticker: Stock ticker (e.g., "010950")
-        force_refresh: Force refresh from KIS API (bypass cache)
-    """
-    # Get or create stock in database
+):
     current_price = await kis_price_service.get_current_price(ticker)
-
     if not current_price:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -45,33 +40,32 @@ async def fetch_stock_data(
         market=current_price.get("market"),
     )
 
-    # Fetch historical OHLCV data
-    # If force_refresh is True, disable cache and fetch fresh data
     ohlcv_data = await kis_price_service.get_daily_price(
-        ticker,
-        use_cache=not force_refresh
+        ticker=ticker,
+        use_cache=not payload.force_refresh,
     )
 
+    weekly_count = 0
     if ohlcv_data:
-        # Use overwrite=True when force_refresh is True to replace existing data
         saved_count = await data_service.save_ohlcv_daily(
-            db, stock.id, ohlcv_data,
-            overwrite=force_refresh
+            db,
+            stock.id,
+            ohlcv_data,
+            overwrite=payload.force_refresh,
         )
-        logger.info(f"🐤 [{ticker}] 일봉 데이터 {saved_count}건 저장 완료")
+        logger.info("🐤 [%s] 일봉 데이터 %s건 저장 완료", ticker, saved_count)
+        weekly_count = await data_service.convert_daily_to_weekly(db, stock.id)
+    else:
+        saved_count = 0
 
-        # Convert to weekly
-        await data_service.convert_daily_to_weekly(db, stock.id)
-
-    # Invalidate cache for this stock
-    cache_pattern = f"kis:*{ticker}:*"
-    await redis_client.delete_pattern(cache_pattern)
+    await redis_client.delete_pattern(f"kis:*{ticker}:*")
 
     return {
         "ticker": ticker,
         "name": current_price.get("name"),
         "current_price": current_price.get("current_price"),
         "ohlcv_records": len(ohlcv_data) if ohlcv_data else 0,
+        "weekly_records": weekly_count,
         "message": "Data fetched successfully",
     }
 
@@ -79,17 +73,7 @@ async def fetch_stock_data(
 @router.post("/batch")
 async def fetch_batch_data(
     db: AsyncSession = Depends(get_db),
-    background_tasks: BackgroundTasks = None,
 ):
-    """
-    Batch fetch data for all watchlist items
-
-    Fetches data sequentially with rate limiting delay
-    """
-    from app.models import Watchlist
-    from sqlalchemy import select
-
-    # Get all watchlist items
     result = await db.execute(
         select(Watchlist).order_by(Watchlist.priority.desc())
     )
@@ -103,9 +87,7 @@ async def fetch_batch_data(
     results = []
     for item in watchlist_items:
         try:
-            # Fetch data for this stock
             current_price = await kis_price_service.get_current_price(item.ticker)
-
             if current_price:
                 stock = await data_service.get_or_create_stock(
                     db,
@@ -115,55 +97,70 @@ async def fetch_batch_data(
                 )
 
                 ohlcv_data = await kis_price_service.get_daily_price(
-                    item.ticker, use_cache=False
+                    item.ticker,
+                    use_cache=False,
                 )
 
                 if ohlcv_data:
                     saved_count = await data_service.save_ohlcv_daily(
-                        db, stock.id, ohlcv_data
+                        db,
+                        stock.id,
+                        ohlcv_data,
                     )
-                    await data_service.convert_daily_to_weekly(db, stock.id)
+                    weekly_count = await data_service.convert_daily_to_weekly(db, stock.id)
 
-                    results.append({
-                        "ticker": item.ticker,
-                        "name": item.name,
-                        "status": "success",
-                        "records": saved_count,
-                    })
-
+                    results.append(
+                        {
+                            "ticker": item.ticker,
+                            "name": item.name,
+                            "status": "success",
+                            "records": saved_count,
+                            "weekly_records": weekly_count,
+                        }
+                    )
                     logger.info(
-                        f"🐤 [{item.ticker}] {item.name} - {saved_count}건 수집 완료"
+                        "🐤 [%s] %s - %s건 수집 완료",
+                        item.ticker,
+                        item.name,
+                        saved_count,
                     )
                 else:
-                    results.append({
+                    results.append(
+                        {
+                            "ticker": item.ticker,
+                            "name": item.name,
+                            "status": "no_data",
+                            "records": 0,
+                            "weekly_records": 0,
+                        }
+                    )
+            else:
+                results.append(
+                    {
                         "ticker": item.ticker,
                         "name": item.name,
-                        "status": "no_data",
+                        "status": "not_found",
                         "records": 0,
-                    })
-            else:
-                results.append({
+                        "weekly_records": 0,
+                    }
+                )
+
+            await asyncio.sleep(0.1)
+        except Exception as exc:
+            logger.error("❌ [%s] 데이터 수집 실패: %s", item.ticker, exc)
+            results.append(
+                {
                     "ticker": item.ticker,
                     "name": item.name,
-                    "status": "not_found",
+                    "status": "error",
+                    "error": str(exc),
                     "records": 0,
-                })
-
-            # Rate limiting delay (0.1s between requests)
-            await asyncio.sleep(0.1)
-
-        except Exception as e:
-            logger.error(f"❌ [{item.ticker}] 데이터 수집 실패: {e}")
-            results.append({
-                "ticker": item.ticker,
-                "name": item.name,
-                "status": "error",
-                "error": str(e),
-                "records": 0,
-            })
+                    "weekly_records": 0,
+                }
+            )
 
     return {
-        "message": f"Batch fetch completed",
+        "message": "Batch fetch completed",
         "total": len(watchlist_items),
         "results": results,
     }

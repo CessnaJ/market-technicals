@@ -218,6 +218,10 @@ node_modules/
 # React 빌드 결과물
 dist/
 build/
+
+# Local editor / OS artifacts
+.idea/
+.DS_Store
 out/
 
 # 패키지 매니저 로그

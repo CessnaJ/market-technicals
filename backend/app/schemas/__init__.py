@@ -8,6 +8,7 @@ from app.schemas.indicator import (
     IndicatorCache, IndicatorCacheCreate,
     WeinsteinStage, VPCIValue, DarvasBox,
     FibonacciLevels, Signal, SignalCreate,
+    SignalDTO, SignalsResponse,
     BreakoutChecklist
 )
 from app.schemas.financial import (
@@ -25,6 +26,7 @@ __all__ = [
     "IndicatorCache", "IndicatorCacheCreate",
     "WeinsteinStage", "VPCIValue", "DarvasBox",
     "FibonacciLevels", "Signal", "SignalCreate",
+    "SignalDTO", "SignalsResponse",
     "BreakoutChecklist",
     # Financial
     "FinancialData", "FinancialDataCreate", "FinancialMetrics",

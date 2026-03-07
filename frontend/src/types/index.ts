@@ -57,23 +57,22 @@ export interface FibonacciData {
 export interface WeinsteinData {
   current_stage: number;
   stage_label: string;
-  ma_30w: number;
-  mansfield_rs: number;
+  ma_30w: number | null;
+  mansfield_rs: number | null;
 }
 
 export interface Signal {
-  id: number;
   signal_type: string;
   signal_date: string;
   direction: 'BULLISH' | 'BEARISH' | 'WARNING';
   strength: number | null;
-  is_false_signal: boolean | null;
   details: any;
 }
 
 export interface FinancialMetrics {
   ticker: string;
   name: string;
+  period_date: string | null;
   psr?: number;
   per?: number;
   pbr?: number;
@@ -95,10 +94,6 @@ export interface ChartDataResponse {
     bollinger?: BollingerData[];
     vpci?: VPCIData[];
   };
-  weinstein?: WeinsteinData;
-  darvas_boxes?: DarvasBox[];
-  fibonacci?: FibonacciData;
-  signals?: Signal[];
 }
 
 export interface WatchlistItem {

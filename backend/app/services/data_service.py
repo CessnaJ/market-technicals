@@ -184,13 +184,14 @@ class DataService:
         """
         daily_data = await self.get_ohlcv_daily(db, stock_id, limit=1000)
 
+        await db.execute(delete(OHLCWeekly).where(OHLCWeekly.stock_id == stock_id))
+
         if not daily_data:
+            await db.commit()
             return 0
 
-        # Group by week
         weekly_groups = {}
-        for daily in daily_data:
-            # Get Monday of the week
+        for daily in sorted(daily_data, key=lambda item: item.date):
             week_start = daily.date - timedelta(days=daily.date.weekday())
             week_key = week_start.strftime("%Y-%m-%d")
 
@@ -203,16 +204,29 @@ class DataService:
                     "close": daily.close,
                     "volume": daily.volume,
                 }
-            else:
-                group = weekly_groups[week_key]
-                group["high"] = max(group["high"], daily.high)
-                group["low"] = min(group["low"], daily.low)
-                group["close"] = daily.close
-                group["volume"] += daily.volume
+                continue
 
-        # Save weekly data
-        weekly_list = list(weekly_groups.values())
-        return await self.save_ohlcv_weekly(db, stock_id, weekly_list)
+            group = weekly_groups[week_key]
+            group["high"] = max(group["high"], daily.high)
+            group["low"] = min(group["low"], daily.low)
+            group["close"] = daily.close
+            group["volume"] += daily.volume
+
+        for data in weekly_groups.values():
+            db.add(
+                OHLCWeekly(
+                    stock_id=stock_id,
+                    week_start=data["week_start"],
+                    open=data["open"],
+                    high=data["high"],
+                    low=data["low"],
+                    close=data["close"],
+                    volume=data["volume"],
+                )
+            )
+
+        await db.commit()
+        return len(weekly_groups)
 
 
 # Global data service instance

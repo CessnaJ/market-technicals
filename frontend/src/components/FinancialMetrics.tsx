@@ -1,141 +1,130 @@
-import { WeinsteinData, FinancialMetrics as FinancialMetricsType, COLORS } from '../types'
+import { COLORS, FinancialMetrics as FinancialMetricsType, Signal, WeinsteinData } from '../types'
 
 interface FinancialMetricsProps {
-  weinstein?: WeinsteinData
-  financial?: FinancialMetricsType
-  signals?: any[]
+  weinstein?: WeinsteinData | null
+  financial?: FinancialMetricsType | null
+  signals?: Signal[]
 }
 
-export default function FinancialMetrics({ weinstein, financial, signals }: FinancialMetricsProps) {
-  const getStageColor = (stage: number) => {
-    switch (stage) {
-      case 1:
-        return COLORS.stage1
-      case 2:
-        return COLORS.stage2
-      case 3:
-        return COLORS.stage3
-      case 4:
-        return COLORS.stage4
-      default:
-        return 'transparent'
-    }
+function formatMetric(value: number | null | undefined, suffix = '') {
+  if (value == null) {
+    return '-'
   }
 
-  const getStageLabel = (stage: number) => {
-    switch (stage) {
-      case 1:
-        return 'BASING'
-      case 2:
-        return 'ADVANCING'
-      case 3:
-        return 'TOPPING'
-      case 4:
-        return 'DECLINING'
-      default:
-        return 'UNKNOWN'
-    }
-  }
+  return `${value.toFixed(2)}${suffix}`
+}
 
-  const latestSignal = signals && signals.length > 0 ? signals[0] : null
+function getStageColor(stage: number) {
+  switch (stage) {
+    case 1:
+      return COLORS.stage1
+    case 2:
+      return COLORS.stage2
+    case 3:
+      return COLORS.stage3
+    case 4:
+      return COLORS.stage4
+    default:
+      return 'transparent'
+  }
+}
+
+function getStageLabel(stage: number) {
+  switch (stage) {
+    case 1:
+      return 'BASING'
+    case 2:
+      return 'ADVANCING'
+    case 3:
+      return 'TOPPING'
+    case 4:
+      return 'DECLINING'
+    default:
+      return 'UNKNOWN'
+  }
+}
+
+export default function FinancialMetrics({ weinstein, financial, signals = [] }: FinancialMetricsProps) {
+  const latestSignal = signals.length > 0 ? signals[0] : null
 
   return (
     <div className="bg-gray-800 rounded-lg p-4 space-y-4">
       <h3 className="text-lg font-semibold mb-3">Financial Metrics</h3>
 
-      {/* PSR */}
-      {financial && financial.psr !== undefined && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">PSR:</span>
-          <div className="flex items-center gap-2">
-            <span className={`font-semibold ${financial.psr < 0.4 ? 'text-green-500' : 'text-yellow-500'}`}>
-              {financial.psr?.toFixed(2)}
-            </span>
-            {financial.psr < 0.4 && (
-              <span className="text-xs text-green-500">
-                [Best Case {'<'} 0.4]
-              </span>
-            )}
-          </div>
-        </div>
-      )}
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">Period:</span>
+        <span className="font-semibold">{financial?.period_date ?? '-'}</span>
+      </div>
 
-      {/* Weinstein Stage */}
-      {weinstein && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">Weinstein Stage:</span>
-          <div className="flex items-center gap-2">
-            <span
-              className={`font-semibold px-2 py-1 rounded`}
-              style={{ backgroundColor: getStageColor(weinstein.current_stage) }}
-            >
-              {weinstein.current_stage} ({getStageLabel(weinstein.current_stage)})
-            </span>
-          </div>
-        </div>
-      )}
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">PSR:</span>
+        <span className="font-semibold">{formatMetric(financial?.psr)}</span>
+      </div>
 
-            {/* Mansfield RS */}
-      {weinstein && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">Mansfield RS:</span>
-          {/* 
-             수정 사항:
-             1. toFixed 호출 전 ?. 추가 (null 안전 처리)
-             2. 값이 없을 경우 표시할 fallback UI 추가 (예: '-' 또는 'N/A')
-          */}
-          <span className={`font-semibold ${
-            (weinstein.mansfield_rs ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'
-          }`}>
-            {weinstein.mansfield_rs != null 
-              ? `${weinstein.mansfield_rs >= 0 ? '+' : ''}${weinstein.mansfield_rs.toFixed(2)}` 
-              : '-'}
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">PER:</span>
+        <span className="font-semibold">{formatMetric(financial?.per)}</span>
+      </div>
+
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">PBR:</span>
+        <span className="font-semibold">{formatMetric(financial?.pbr)}</span>
+      </div>
+
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">ROE:</span>
+        <span className="font-semibold">{formatMetric(financial?.roe, '%')}</span>
+      </div>
+
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">Debt Ratio:</span>
+        <span className="font-semibold">{formatMetric(financial?.debt_ratio, '%')}</span>
+      </div>
+
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">Market Cap:</span>
+        <span className="font-semibold">{financial?.market_cap != null ? financial.market_cap.toLocaleString() : '-'}</span>
+      </div>
+
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">Weinstein Stage:</span>
+        <div className="flex items-center gap-2">
+          <span
+            className="font-semibold px-2 py-1 rounded"
+            style={{ backgroundColor: getStageColor(weinstein?.current_stage ?? 0) }}
+          >
+            {weinstein ? `${weinstein.current_stage} (${getStageLabel(weinstein.current_stage)})` : '-'}
           </span>
         </div>
-      )}
+      </div>
 
-      {/* PER */}
-      {financial && financial.per !== undefined && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">PER:</span>
-          <span className="font-semibold">{financial.per?.toFixed(2)}</span>
-        </div>
-      )}
+      <div className="flex justify-between items-center">
+        <span className="text-gray-400">Mansfield RS:</span>
+        <span className={`font-semibold ${(weinstein?.mansfield_rs ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+          {weinstein?.mansfield_rs != null ? `${weinstein.mansfield_rs >= 0 ? '+' : ''}${weinstein.mansfield_rs.toFixed(2)}` : '-'}
+        </span>
+      </div>
 
-      {/* PBR */}
-      {financial && financial.pbr !== undefined && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">PBR:</span>
-          <span className="font-semibold">{financial.pbr?.toFixed(2)}</span>
-        </div>
-      )}
-
-      {/* ROE */}
-      {financial && financial.roe !== undefined && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">ROE:</span>
-          <span className="font-semibold">{financial.roe?.toFixed(2)}%</span>
-        </div>
-      )}
-
-      {/* 최근 시그널 */}
-      {latestSignal && (
-        <div className="pt-4 border-t border-gray-700">
-          <div className="text-sm text-gray-400 mb-2">Recent Signal</div>
+      <div className="pt-4 border-t border-gray-700">
+        <div className="text-sm text-gray-400 mb-2">Recent Signal</div>
+        {latestSignal ? (
           <div className="flex justify-between items-center">
             <div>
               <div className="font-semibold">{latestSignal.signal_type}</div>
               <div className="text-xs text-gray-400">{latestSignal.signal_date}</div>
+              <div className="text-xs text-gray-500">{latestSignal.direction}</div>
             </div>
             <div className="text-right">
               <div className="text-sm">Confidence</div>
-              <div className={`font-semibold ${latestSignal.strength && latestSignal.strength > 0.7 ? 'text-green-500' : 'text-yellow-500'}`}>
-                {latestSignal.strength ? Math.round(latestSignal.strength * 100) : 0}%
+              <div className={`font-semibold ${latestSignal.strength != null && latestSignal.strength > 0.7 ? 'text-green-500' : 'text-yellow-500'}`}>
+                {latestSignal.strength != null ? `${Math.round(latestSignal.strength * 100)}%` : '-'}
               </div>
             </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="text-sm text-gray-400">No recent signals</div>
+        )}
+      </div>
     </div>
   )
 }

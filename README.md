@@ -47,7 +47,7 @@ market-technicals/
 │       ├── core/          # Config, DB, Redis
 │       ├── models/         # SQLAlchemy ORM
 │       ├── schemas/        # Pydantic schemas
-│       ├── services/       # KIS API, data service
+│       ├── services/       # KIS API, price/financial data services
 │       ├── indicators/     # Technical indicators
 │       └── api/           # API endpoints
 ├── frontend/
@@ -58,8 +58,6 @@ market-technicals/
 │       ├── components/
 │       ├── hooks/
 │       └── api/
-└── nginx/
-    └── nginx.conf
 ```
 
 ## Quick Start
@@ -128,8 +126,13 @@ docker-compose down
 - `GET /api/v1/signals/{ticker}/latest` - Latest signals
 
 ### Financial Data
-- `GET /api/v1/financial/{ticker}` - Financial metrics
-- `GET /api/v1/financial/{ticker}/psr-history` - PSR history
+- `GET /api/v1/financial/{ticker}` - Financial metrics (auto-refreshes cached KIS financial-ratio data)
+  - `GET /api/v1/financial/{ticker}/psr-history` - PSR history
+
+## Current Constraints
+
+- The chart currently loads up to one year of history per request.
+- Historical pagination and Mansfield RS benchmark integration are deferred.
 
 ## Development
 
