@@ -2,12 +2,13 @@ from app.schemas.stock import Stock, StockCreate, StockUpdate
 from app.schemas.ohlcv import (
     OHLCDaily, OHLCDailyCreate,
     OHLCWeekly, OHLCWeeklyCreate,
-    ChartDataPoint, ChartDataResponse
+    ChartDataPoint, ChartDataResponse, ChartHistoryMetadata
 )
 from app.schemas.indicator import (
     IndicatorCache, IndicatorCacheCreate,
     WeinsteinStage, VPCIValue, DarvasBox,
     FibonacciLevels, Signal, SignalCreate,
+    SignalDTO, SignalsResponse,
     BreakoutChecklist
 )
 from app.schemas.financial import (
@@ -20,11 +21,12 @@ __all__ = [
     # OHLCV
     "OHLCDaily", "OHLCDailyCreate",
     "OHLCWeekly", "OHLCWeeklyCreate",
-    "ChartDataPoint", "ChartDataResponse",
+    "ChartDataPoint", "ChartDataResponse", "ChartHistoryMetadata",
     # Indicator
     "IndicatorCache", "IndicatorCacheCreate",
     "WeinsteinStage", "VPCIValue", "DarvasBox",
     "FibonacciLevels", "Signal", "SignalCreate",
+    "SignalDTO", "SignalsResponse",
     "BreakoutChecklist",
     # Financial
     "FinancialData", "FinancialDataCreate", "FinancialMetrics",

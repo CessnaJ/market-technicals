@@ -80,6 +80,18 @@ class Signal(SignalCreate):
         from_attributes = True
 
 
+class SignalDTO(BaseModel):
+    signal_type: str
+    signal_date: date
+    direction: str
+    strength: Optional[float] = None
+    details: Optional[Dict[str, Any]] = None
+
+
+class SignalsResponse(BaseModel):
+    signals: List[SignalDTO]
+
+
 class BreakoutChecklist(BaseModel):
     """Breakout confidence checklist"""
     weinstein_breakout: bool

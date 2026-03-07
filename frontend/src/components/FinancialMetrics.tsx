@@ -1,141 +1,172 @@
-import { WeinsteinData, FinancialMetrics as FinancialMetricsType, COLORS } from '../types'
+import { COLORS, FinancialMetrics as FinancialMetricsType, Signal, WeinsteinData } from '../types'
 
 interface FinancialMetricsProps {
-  weinstein?: WeinsteinData
-  financial?: FinancialMetricsType
-  signals?: any[]
+  weinstein?: WeinsteinData | null
+  financial?: FinancialMetricsType | null
+  signals?: Signal[]
 }
 
-export default function FinancialMetrics({ weinstein, financial, signals }: FinancialMetricsProps) {
-  const getStageColor = (stage: number) => {
-    switch (stage) {
-      case 1:
-        return COLORS.stage1
-      case 2:
-        return COLORS.stage2
-      case 3:
-        return COLORS.stage3
-      case 4:
-        return COLORS.stage4
-      default:
-        return 'transparent'
-    }
+function formatMetric(value: number | null | undefined, suffix = '') {
+  if (value == null) {
+    return '-'
   }
 
-  const getStageLabel = (stage: number) => {
-    switch (stage) {
-      case 1:
-        return 'BASING'
-      case 2:
-        return 'ADVANCING'
-      case 3:
-        return 'TOPPING'
-      case 4:
-        return 'DECLINING'
-      default:
-        return 'UNKNOWN'
-    }
-  }
+  return `${value.toFixed(2)}${suffix}`
+}
 
-  const latestSignal = signals && signals.length > 0 ? signals[0] : null
+function formatStageLabel(label?: string | null) {
+  return label ?? 'UNKNOWN'
+}
+
+function getStageColor(stage: number) {
+  switch (stage) {
+    case 1:
+      return COLORS.stage1
+    case 2:
+      return COLORS.stage2
+    case 3:
+      return COLORS.stage3
+    case 4:
+      return COLORS.stage4
+    default:
+      return '#4b5563'
+  }
+}
+
+export default function FinancialMetrics({ weinstein, financial, signals = [] }: FinancialMetricsProps) {
+  const latestSignal = signals.length > 0 ? signals[0] : null
+  const stageHistory = (weinstein?.stage_history ?? []).slice(-24)
+  const recentTransitions = (weinstein?.transitions ?? []).slice(-3).reverse()
 
   return (
-    <div className="bg-gray-800 rounded-lg p-4 space-y-4">
-      <h3 className="text-lg font-semibold mb-3">Financial Metrics</h3>
-
-      {/* PSR */}
-      {financial && financial.psr !== undefined && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">PSR:</span>
-          <div className="flex items-center gap-2">
-            <span className={`font-semibold ${financial.psr < 0.4 ? 'text-green-500' : 'text-yellow-500'}`}>
-              {financial.psr?.toFixed(2)}
-            </span>
-            {financial.psr < 0.4 && (
-              <span className="text-xs text-green-500">
-                [Best Case {'<'} 0.4]
-              </span>
-            )}
+    <div className="space-y-6">
+      <section className="bg-[#131722] rounded-2xl border border-gray-800 p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-[10px] font-black tracking-[0.28em] text-gray-500 uppercase">Market Cycle</div>
+            <h3 className="mt-2 text-xl font-black tracking-tight">Weinstein Stage</h3>
+          </div>
+          <div
+            className="px-3 py-1 rounded-full text-[11px] font-black text-white"
+            style={{ backgroundColor: getStageColor(weinstein?.current_stage ?? 0) }}
+          >
+            {weinstein ? `STAGE ${weinstein.current_stage}` : 'NO DATA'}
           </div>
         </div>
-      )}
 
-      {/* Weinstein Stage */}
-      {weinstein && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">Weinstein Stage:</span>
-          <div className="flex items-center gap-2">
-            <span
-              className={`font-semibold px-2 py-1 rounded`}
-              style={{ backgroundColor: getStageColor(weinstein.current_stage) }}
-            >
-              {weinstein.current_stage} ({getStageLabel(weinstein.current_stage)})
-            </span>
-          </div>
-        </div>
-      )}
-
-            {/* Mansfield RS */}
-      {weinstein && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">Mansfield RS:</span>
-          {/* 
-             수정 사항:
-             1. toFixed 호출 전 ?. 추가 (null 안전 처리)
-             2. 값이 없을 경우 표시할 fallback UI 추가 (예: '-' 또는 'N/A')
-          */}
-          <span className={`font-semibold ${
-            (weinstein.mansfield_rs ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'
-          }`}>
-            {weinstein.mansfield_rs != null 
-              ? `${weinstein.mansfield_rs >= 0 ? '+' : ''}${weinstein.mansfield_rs.toFixed(2)}` 
-              : '-'}
-          </span>
-        </div>
-      )}
-
-      {/* PER */}
-      {financial && financial.per !== undefined && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">PER:</span>
-          <span className="font-semibold">{financial.per?.toFixed(2)}</span>
-        </div>
-      )}
-
-      {/* PBR */}
-      {financial && financial.pbr !== undefined && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">PBR:</span>
-          <span className="font-semibold">{financial.pbr?.toFixed(2)}</span>
-        </div>
-      )}
-
-      {/* ROE */}
-      {financial && financial.roe !== undefined && (
-        <div className="flex justify-between items-center">
-          <span className="text-gray-400">ROE:</span>
-          <span className="font-semibold">{financial.roe?.toFixed(2)}%</span>
-        </div>
-      )}
-
-      {/* 최근 시그널 */}
-      {latestSignal && (
-        <div className="pt-4 border-t border-gray-700">
-          <div className="text-sm text-gray-400 mb-2">Recent Signal</div>
-          <div className="flex justify-between items-center">
-            <div>
-              <div className="font-semibold">{latestSignal.signal_type}</div>
-              <div className="text-xs text-gray-400">{latestSignal.signal_date}</div>
+        <div className="mt-4 flex items-center justify-between gap-4">
+          <div>
+            <div className="text-lg font-black">{formatStageLabel(weinstein?.stage_label)}</div>
+            <div className="text-xs text-gray-400">
+              {weinstein?.benchmark_name ? `Benchmark ${weinstein.benchmark_name} (${weinstein.benchmark_ticker})` : 'Benchmark not linked'}
             </div>
-            <div className="text-right">
-              <div className="text-sm">Confidence</div>
-              <div className={`font-semibold ${latestSignal.strength && latestSignal.strength > 0.7 ? 'text-green-500' : 'text-yellow-500'}`}>
-                {latestSignal.strength ? Math.round(latestSignal.strength * 100) : 0}%
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">Mansfield RS</div>
+            <div className={`text-lg font-black ${(weinstein?.mansfield_rs ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {weinstein?.mansfield_rs != null ? `${weinstein.mansfield_rs >= 0 ? '+' : ''}${weinstein.mansfield_rs.toFixed(2)}` : '-'}
+            </div>
+          </div>
+        </div>
+
+        {stageHistory.length > 0 && (
+          <div className="mt-5">
+            <div className="mb-2 flex items-center justify-between text-[10px] font-black tracking-[0.18em] text-gray-500 uppercase">
+              <span>Stage History Strip</span>
+              <span>{stageHistory[0].date} → {stageHistory[stageHistory.length - 1].date}</span>
+            </div>
+            <div className="flex h-5 overflow-hidden rounded-lg border border-gray-800 bg-[#0b0e14]">
+              {stageHistory.map((item) => (
+                <div
+                  key={`${item.date}-${item.stage}`}
+                  className="flex-1"
+                  style={{ backgroundColor: getStageColor(item.stage) }}
+                  title={`${item.date} · Stage ${item.stage} · ${item.stage_label}`}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5 rounded-xl border border-gray-800 bg-[#0b0e14] p-4">
+          <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">Stage Explanation</div>
+          <div className="mt-2 text-sm font-bold">{weinstein?.description?.title ?? 'Stage data unavailable'}</div>
+          <p className="mt-2 text-sm leading-6 text-gray-300">
+            {weinstein?.description?.summary ?? '30주 이상 데이터가 확보되면 단계 설명이 표시됩니다.'}
+          </p>
+          <div className="mt-3 space-y-2">
+            {(weinstein?.description?.checklist ?? []).map((item) => (
+              <div key={item} className="text-xs text-gray-400">
+                • {item}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {recentTransitions.length > 0 && (
+          <div className="mt-5">
+            <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">Recent Stage Transitions</div>
+            <div className="mt-3 space-y-2">
+              {recentTransitions.map((item) => (
+                <div key={`${item.date}-${item.from_stage}-${item.to_stage}`} className="flex items-center justify-between rounded-xl bg-[#0b0e14] px-3 py-2 text-xs">
+                  <span className="text-gray-300">{item.date}</span>
+                  <span className="font-bold text-gray-100">
+                    {item.from_stage} → {item.to_stage} {item.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="bg-[#131722] rounded-2xl border border-gray-800 p-5 shadow-2xl">
+        <div className="text-[10px] font-black tracking-[0.28em] text-gray-500 uppercase">Financial Snapshot</div>
+        <div className="mt-4 space-y-3">
+          <MetricRow label="Period" value={financial?.period_date ?? '-'} />
+          <MetricRow label="PSR" value={formatMetric(financial?.psr)} />
+          <MetricRow label="PER" value={formatMetric(financial?.per)} />
+          <MetricRow label="PBR" value={formatMetric(financial?.pbr)} />
+          <MetricRow label="ROE" value={formatMetric(financial?.roe, '%')} />
+          <MetricRow label="Debt Ratio" value={formatMetric(financial?.debt_ratio, '%')} />
+          <MetricRow
+            label="Market Cap"
+            value={financial?.market_cap != null ? financial.market_cap.toLocaleString() : '-'}
+          />
+        </div>
+      </section>
+
+      <section className="bg-[#131722] rounded-2xl border border-gray-800 p-5 shadow-2xl">
+        <div className="text-[10px] font-black tracking-[0.28em] text-gray-500 uppercase">Recent Signal</div>
+        {latestSignal ? (
+          <div className="mt-4 rounded-xl bg-[#0b0e14] p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-black">{latestSignal.signal_type}</div>
+                <div className="mt-1 text-xs text-gray-400">{latestSignal.signal_date}</div>
+                <div className="mt-1 text-xs text-gray-500">{latestSignal.direction}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] font-black tracking-[0.18em] text-gray-500 uppercase">Strength</div>
+                <div className={`mt-1 text-lg font-black ${latestSignal.strength != null && latestSignal.strength > 0.7 ? 'text-green-400' : 'text-yellow-400'}`}>
+                  {latestSignal.strength != null ? `${Math.round(latestSignal.strength * 100)}%` : '-'}
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="mt-4 text-sm text-gray-400">No recent signals</div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function MetricRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <span className="text-gray-400">{label}</span>
+      <span className="font-bold text-gray-100">{value}</span>
     </div>
   )
 }

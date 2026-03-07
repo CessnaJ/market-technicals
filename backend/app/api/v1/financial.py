@@ -1,80 +1,46 @@
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from typing import Optional
-from datetime import date
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models import Stock, FinancialData
-import logging
+from app.models import Stock
+from app.schemas import FinancialMetrics
+from app.services.data_service import data_service
+from app.services.financial_service import financial_service
+from app.services.kis_api.price import kis_price_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/financial", tags=["financial"])
 
 
-@router.get("/{ticker}")
+@router.get("/{ticker}", response_model=FinancialMetrics)
 async def get_financial_metrics(
     ticker: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Get financial metrics for a stock
-
-    Returns:
-        Financial metrics including PSR, PER, PBR, ROE, Debt Ratio, Market Cap
-    """
-    from fastapi import HTTPException, status
-
-    # Get stock
     result = await db.execute(select(Stock).where(Stock.ticker == ticker))
     stock = result.scalar_one_or_none()
 
-    if not stock:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Stock {ticker} not found",
+    if stock is None:
+        current_price = await kis_price_service.get_current_price(ticker)
+        if not current_price:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Stock {ticker} not found",
+            )
+
+        stock = await data_service.get_or_create_stock(
+            db,
+            ticker=ticker,
+            name=current_price.get("name", ticker),
+            market=current_price.get("market"),
         )
 
-    # Get financial data
-    result = await db.execute(
-        select(FinancialData)
-        .where(FinancialData.stock_id == stock.id)
-        .order_by(FinancialData.period_date.desc())
-        .limit(1)
-    )
-    financial_data = result.scalar_one_or_none()
+    latest = await financial_service.get_latest_financial_data(db, stock.id)
+    if financial_service.is_stale(latest):
+        latest = await financial_service.refresh_financial_data(db, stock) or latest
 
-    if not financial_data:
-        # Return empty metrics if no financial data available
-        return {
-            "ticker": ticker,
-            "name": stock.name,
-            "psr": None,
-            "per": None,
-            "pbr": None,
-            "roe": None,
-            "debt_ratio": None,
-            "market_cap": None,
-            "period_date": None,
-        }
-
-    # Calculate market cap if not available
-    market_cap = None
-    if financial_data.market_cap:
-        market_cap = float(financial_data.market_cap)
-    elif financial_data.shares_outstanding and stock.current_price:
-        # Calculate market cap: shares * price
-        market_cap = float(financial_data.shares_outstanding) * float(stock.current_price)
-
-    return {
-        "ticker": ticker,
-        "name": stock.name,
-        "psr": float(financial_data.psr) if financial_data.psr else None,
-        "per": float(financial_data.per) if financial_data.per else None,
-        "pbr": float(financial_data.pbr) if financial_data.pbr else None,
-        "roe": float(financial_data.roe) if financial_data.roe else None,
-        "debt_ratio": float(financial_data.debt_ratio) if financial_data.debt_ratio else None,
-        "market_cap": market_cap,
-        "period_date": financial_data.period_date.isoformat() if financial_data.period_date else None,
-    }
+    return financial_service.to_summary(stock, latest)

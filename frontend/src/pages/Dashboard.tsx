@@ -1,164 +1,330 @@
-import { useState } from 'react'
-import { useChartData } from '../hooks/useChartData'
-import { useIndicators } from '../hooks/useIndicators'
+import { useEffect, useMemo, useState } from 'react'
+
+import apiClient from '../api/client'
 import CandlestickChart from '../components/Chart/CandlestickChart'
 import FinancialMetrics from '../components/FinancialMetrics'
 import Watchlist from '../components/Watchlist'
-import apiClient from '../api/client'
-import { COLORS } from '../types'
+import { useChartData } from '../hooks/useChartData'
+import { useFinancialMetrics } from '../hooks/useFinancialMetrics'
+import { useIndicators } from '../hooks/useIndicators'
+import { useRelativeStrength } from '../hooks/useRelativeStrength'
+import { COLORS, SmaConfig } from '../types'
+
+type Timeframe = 'daily' | 'weekly' | 'monthly'
+type ScaleMode = 'linear' | 'log'
+type IndicatorTab = 'rsi' | 'macd' | 'vpci' | 'rs'
+type FibonacciMode = 'auto' | 'manual'
+type FibonacciTrend = 'UP' | 'DOWN'
+
+type LegacyDashboardSettings = {
+  timeframe?: Timeframe
+  scale?: ScaleMode
+  benchmarkTicker?: string
+  activeIndicator?: IndicatorTab
+  smaByTimeframe?: Record<Timeframe, number[]>
+  fibonacciMode?: FibonacciMode
+  fibonacciTrend?: FibonacciTrend
+  manualSwingLow?: string
+  manualSwingHigh?: string
+}
+
+type DashboardUiSettings = {
+  timeframe: Timeframe
+  scale: ScaleMode
+  benchmarkTicker: string
+  activeIndicator: IndicatorTab
+  headerCollapsed: boolean
+  smaConfigsByTimeframe: Record<Timeframe, SmaConfig[]>
+  fibonacciMode: FibonacciMode
+  fibonacciTrend: FibonacciTrend
+  manualSwingLow: string
+  manualSwingHigh: string
+}
+
+const STORAGE_KEY = 'quant-viz:dashboard-settings:v4'
+const LEGACY_STORAGE_KEY = 'quant-viz:dashboard-settings:v3'
+const DEFAULT_SMA_PERIODS: Record<Timeframe, number[]> = {
+  daily: [5, 10, 20, 60, 120],
+  weekly: [5, 10, 20, 30],
+  monthly: [3, 6, 12],
+}
+const DEFAULT_SMA_COLORS = ['#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#10b981', '#f43f5e']
+
+const DEFAULT_SETTINGS: DashboardUiSettings = {
+  timeframe: 'daily',
+  scale: 'linear',
+  benchmarkTicker: '069500',
+  activeIndicator: 'rsi',
+  headerCollapsed: true,
+  smaConfigsByTimeframe: buildDefaultSmaConfigsByTimeframe(),
+  fibonacciMode: 'auto',
+  fibonacciTrend: 'UP',
+  manualSwingLow: '',
+  manualSwingHigh: '',
+}
 
 export default function Dashboard() {
+  const [storedSettings] = useState(loadDashboardSettings)
+
   const [ticker, setTicker] = useState('010950')
-  const [timeframe, setTimeframe] = useState<'daily' | 'weekly'>('daily')
-  const [scale, setScale] = useState<'linear' | 'log'>('linear')
+  const [timeframe, setTimeframe] = useState<Timeframe>(storedSettings.timeframe)
+  const [scale, setScale] = useState<ScaleMode>(storedSettings.scale)
+  const [benchmarkTicker, setBenchmarkTicker] = useState(storedSettings.benchmarkTicker)
+  const [activeIndicator, setActiveIndicator] = useState<IndicatorTab>(storedSettings.activeIndicator)
+  const [headerCollapsed, setHeaderCollapsed] = useState(storedSettings.headerCollapsed)
+  const [smaConfigsByTimeframe, setSmaConfigsByTimeframe] = useState<Record<Timeframe, SmaConfig[]>>(storedSettings.smaConfigsByTimeframe)
+  const [fibonacciMode, setFibonacciMode] = useState<FibonacciMode>(storedSettings.fibonacciMode)
+  const [fibonacciTrend, setFibonacciTrend] = useState<FibonacciTrend>(storedSettings.fibonacciTrend)
+  const [manualSwingLow, setManualSwingLow] = useState(storedSettings.manualSwingLow)
+  const [manualSwingHigh, setManualSwingHigh] = useState(storedSettings.manualSwingHigh)
+  const [isSyncing, setIsSyncing] = useState(false)
+
   const [showSMA, setShowSMA] = useState(true)
   const [showBollinger, setShowBollinger] = useState(true)
   const [showDarvas, setShowDarvas] = useState(true)
   const [showFibonacci, setShowFibonacci] = useState(true)
   const [showWeinstein, setShowWeinstein] = useState(true)
-  const [activeIndicator, setActiveIndicator] = useState<'rsi' | 'macd' | 'vpci'>('rsi')
 
-  const { 
-    data: chartData, 
-    loading: chartLoading, 
-    isRefetching, 
-    refetch, 
-    error: chartError 
+  const currentSmaConfigs = useMemo(
+    () => normalizeSmaConfigs(smaConfigsByTimeframe[timeframe], DEFAULT_SMA_PERIODS[timeframe]),
+    [smaConfigsByTimeframe, timeframe]
+  )
+  const visibleSmaPeriods = useMemo(
+    () => currentSmaConfigs.filter((config) => config.visible).map((config) => config.period),
+    [currentSmaConfigs]
+  )
+
+  const parsedManualSwingLow = manualSwingLow.trim() === '' ? null : Number(manualSwingLow)
+  const parsedManualSwingHigh = manualSwingHigh.trim() === '' ? null : Number(manualSwingHigh)
+  const manualSwingLowValue = parsedManualSwingLow != null && Number.isFinite(parsedManualSwingLow) ? parsedManualSwingLow : null
+  const manualSwingHighValue = parsedManualSwingHigh != null && Number.isFinite(parsedManualSwingHigh) ? parsedManualSwingHigh : null
+
+  const {
+    data: chartData,
+    loading: chartLoading,
+    error: chartError,
+    refetch: refetchChart,
+    fetchOlder,
+    isFetchingOlder,
+    hasMoreBefore,
   } = useChartData({
     ticker,
     timeframe,
     scale,
     enabled: ticker.length > 0,
+    smaPeriods: visibleSmaPeriods,
   })
 
-  const { weinstein, darvas, fibonacci, signals } = useIndicators({
+  const indicatorsEnabled = ticker.length > 0 && !chartLoading && chartData?.ticker === ticker
+
+  const {
+    weinstein,
+    darvas,
+    fibonacci,
+    signals,
+    refetch: refetchIndicators,
+  } = useIndicators({
     ticker,
-    enabled: ticker.length > 0,
+    enabled: indicatorsEnabled,
+    benchmarkTicker,
+    startDate: chartData?.history.oldest_date ?? undefined,
+    endDate: chartData?.history.newest_date ?? undefined,
+    fibonacciMode,
+    fibonacciTrend,
+    manualSwingLow: manualSwingLowValue,
+    manualSwingHigh: manualSwingHighValue,
   })
+
+  const {
+    financial,
+    refetch: refetchFinancial,
+  } = useFinancialMetrics({
+    ticker,
+    enabled: indicatorsEnabled,
+  })
+
+  const {
+    relativeStrength,
+    refetch: refetchRelativeStrength,
+  } = useRelativeStrength({
+    ticker,
+    benchmarkTicker,
+    timeframe,
+    startDate: chartData?.history.oldest_date ?? undefined,
+    endDate: chartData?.history.newest_date ?? undefined,
+    enabled: indicatorsEnabled,
+  })
+
+  useEffect(() => {
+    saveDashboardSettings({
+      timeframe,
+      scale,
+      benchmarkTicker,
+      activeIndicator,
+      headerCollapsed,
+      smaConfigsByTimeframe,
+      fibonacciMode,
+      fibonacciTrend,
+      manualSwingLow,
+      manualSwingHigh,
+    })
+  }, [
+    activeIndicator,
+    benchmarkTicker,
+    fibonacciMode,
+    fibonacciTrend,
+    headerCollapsed,
+    manualSwingHigh,
+    manualSwingLow,
+    scale,
+    smaConfigsByTimeframe,
+    timeframe,
+  ])
 
   const handleForceRefreshData = async () => {
+    if (!ticker || isSyncing) {
+      return
+    }
+
+    setIsSyncing(true)
     try {
-      await apiClient.post(`/fetch/${ticker}`, {
-        force_refresh: true
-      })
-      window.location.reload()
+      await apiClient.post(`/fetch/${ticker}`, { force_refresh: true })
+      await refetchChart()
+      await Promise.all([refetchIndicators(), refetchFinancial(), refetchRelativeStrength()])
     } catch (err: any) {
       console.error('Failed to fetch data:', err)
+    } finally {
+      setIsSyncing(false)
     }
   }
 
+  const handleSmaConfigsChange = (nextConfigs: SmaConfig[]) => {
+    setSmaConfigsByTimeframe((current) => ({
+      ...current,
+      [timeframe]: normalizeSmaConfigs(nextConfigs, DEFAULT_SMA_PERIODS[timeframe]),
+    }))
+  }
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* 헤더 */}
-      <header className="bg-gray-800 border-b border-gray-700 p-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          <div className="flex-1 flex items-center gap-4">
-            <h1 className="text-2xl font-bold">Technical Analysis Dashboard</h1>
-            <div className="flex items-center gap-2">
+    <div className="min-h-screen bg-[#0b0e14] text-gray-100 font-sans">
+      <header className="sticky top-0 z-30 border-b border-gray-800 bg-[#131722] p-4">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-6">
+            <div>
+              <h1 className="text-xl font-black tracking-tighter text-blue-500">QUANT-VIZ Pro</h1>
+              <div className="text-[10px] font-black uppercase tracking-[0.28em] text-gray-500">
+                Stage / RS / Monthly / Manual Fib
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 type="text"
                 value={ticker}
-                onChange={(e) => setTicker(e.target.value)}
-                placeholder="Ticker (e.g., 010950)"
-                className="px-4 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:border-blue-500 focus:outline-none w-48"
+                onChange={(event) => setTicker(event.target.value.toUpperCase())}
+                className="w-44 rounded border border-gray-700 bg-[#1e222d] px-4 py-2 text-sm font-bold uppercase outline-none transition-all focus:border-blue-500"
               />
               <button
                 onClick={handleForceRefreshData}
-                disabled={chartLoading || !ticker}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isSyncing || chartLoading}
+                className="rounded bg-blue-600 px-4 py-2 text-sm font-bold transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {chartLoading ? 'Loading...' : 'Fetch Data'}
+                {isSyncing ? 'SYNCING...' : 'FETCH DATA'}
               </button>
             </div>
           </div>
 
-          {/* 타임프레임 & 스케일 */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-400">Timeframe:</label>
-              <select
-                value={timeframe}
-                onChange={(e) => setTimeframe(e.target.value as 'daily' | 'weekly')}
-                className="px-3 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
-              >
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-              </select>
-            </div>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            <select
+              value={timeframe}
+              onChange={(event) => setTimeframe(event.target.value as Timeframe)}
+              className="rounded border border-gray-700 bg-[#1e222d] p-2 text-xs font-black uppercase outline-none"
+            >
+              <option value="daily">DAILY</option>
+              <option value="weekly">WEEKLY</option>
+              <option value="monthly">MONTHLY</option>
+            </select>
 
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-400">Scale:</label>
-              <select
-                value={scale}
-                onChange={(e) => setScale(e.target.value as 'linear' | 'log')}
-                className="px-3 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
-              >
-                <option value="linear">Linear</option>
-                <option value="log">Log</option>
-              </select>
-            </div>
+            <select
+              value={scale}
+              onChange={(event) => setScale(event.target.value as ScaleMode)}
+              className="rounded border border-gray-700 bg-[#1e222d] p-2 text-xs font-black uppercase outline-none"
+            >
+              <option value="linear">LINEAR SCALE</option>
+              <option value="log">LOG SCALE</option>
+            </select>
+
+            <input
+              type="text"
+              value={benchmarkTicker}
+              onChange={(event) => setBenchmarkTicker(event.target.value.toUpperCase())}
+              placeholder="BENCHMARK"
+              className="rounded border border-gray-700 bg-[#1e222d] px-3 py-2 text-xs font-black uppercase outline-none focus:border-blue-500"
+            />
           </div>
         </div>
       </header>
 
-      {/* 메인 컨텐츠 */}
-      <main className="max-w-7xl mx-auto p-4">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          {/* 왼쪽: 차트 영역 */}
-          <div className="lg:col-span-3 space-y-4">
+      <main className="mx-auto max-w-[1600px] p-4">
+        {chartError && (
+          <div className="mb-4 flex items-center gap-3 rounded-lg border border-red-500/50 bg-red-900/30 p-4 text-sm text-red-400">
+            <span className="h-2 w-2 animate-ping rounded-full bg-red-500" />
+            <strong>Engine Error:</strong> {chartError}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+          <div className="space-y-6 lg:col-span-3">
             {chartData && (
-              <div className="bg-gray-800 rounded-lg p-4">
-                <div className="flex justify-between items-center mb-4">
-                  <div>
-                    <h2 className="text-xl font-bold">{chartData.ticker}</h2>
-                    <p className="text-gray-400">{chartData.name}</p>
-                  </div>
-                  {weinstein && (
-                    <div className="text-right">
-                      <div className="text-sm text-gray-400">Weinstein Stage</div>
-                      <div
-                        className={`font-semibold px-2 py-1 rounded`}
-                        style={{ backgroundColor: getWeinsteinStageColor(weinstein.current_stage) }}
-                      >
-                        {weinstein.current_stage}
-                      </div>
+              <div className="rounded-2xl border border-gray-800 bg-[#131722] p-6 shadow-2xl transition-all">
+                <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-wrap items-baseline gap-3">
+                      <h2 className="text-4xl font-black tracking-tight">{chartData.name}</h2>
+                      <span className="font-mono text-2xl uppercase tracking-widest text-gray-500">{chartData.ticker}</span>
+                      <span className="rounded border border-blue-500/20 bg-blue-600/15 px-2 py-1 text-[10px] font-black tracking-[0.25em] text-blue-300">
+                        {timeframe.toUpperCase()} WINDOW
+                      </span>
                     </div>
-                  )}
-                </div>
 
-                {/* 지표 토글 & 하단 패널 탭 */}
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                  <div className="flex flex-wrap gap-4">
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showSMA} onChange={(e) => setShowSMA(e.target.checked)} className="w-4 h-4"/>
-                      <span>SMA</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showBollinger} onChange={(e) => setShowBollinger(e.target.checked)} className="w-4 h-4"/>
-                      <span>Bollinger</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showDarvas} onChange={(e) => setShowDarvas(e.target.checked)} className="w-4 h-4"/>
-                      <span>Darvas Box</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showFibonacci} onChange={(e) => setShowFibonacci(e.target.checked)} className="w-4 h-4"/>
-                      <span>Fibonacci</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input type="checkbox" checked={showWeinstein} onChange={(e) => setShowWeinstein(e.target.checked)} className="w-4 h-4"/>
-                      <span>Weinstein Stage</span>
-                    </label>
+                    {weinstein && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div
+                          className="rounded-full px-3 py-0.5 text-[10px] font-black text-white"
+                          style={{ backgroundColor: getWeinsteinStageColor(weinstein.current_stage) }}
+                        >
+                          STAGE {weinstein.current_stage}
+                        </div>
+                        <span className="text-[11px] font-black uppercase tracking-[0.18em] text-gray-400">
+                          {weinstein.stage_label}
+                        </span>
+                        <span className="text-[11px] text-gray-500">
+                          {weinstein.description?.summary ?? 'Weinstein market cycle analysis'}
+                        </span>
+                      </div>
+                    )}
+
+                    {relativeStrength && (
+                      <div className="flex flex-wrap items-center gap-3 text-xs">
+                        <span className="rounded-full border border-gray-800 bg-[#0b0e14] px-3 py-1 font-black text-gray-300">
+                          RS vs {relativeStrength.benchmark_name} ({relativeStrength.benchmark_ticker})
+                        </span>
+                        <span className={`font-black ${relativeStrength.current_relative_return >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          Spread {relativeStrength.current_relative_return >= 0 ? '+' : ''}{relativeStrength.current_relative_return.toFixed(2)}
+                        </span>
+                        <span className={`font-black ${(relativeStrength.current_mansfield_rs ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          Mansfield {relativeStrength.current_mansfield_rs != null ? `${relativeStrength.current_mansfield_rs >= 0 ? '+' : ''}${relativeStrength.current_mansfield_rs.toFixed(2)}` : '-'}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
-                  {/* 하단 지표 탭 UI */}
-                  <div className="flex gap-2 bg-gray-900 rounded-lg p-1">
-                    {(['rsi', 'macd', 'vpci'] as const).map((tab) => (
+                  <div className="flex flex-wrap gap-2 rounded-xl border border-gray-800 bg-[#0b0e14] p-1.5 shadow-inner">
+                    {(['rsi', 'macd', 'vpci', 'rs'] as const).map((tab) => (
                       <button
                         key={tab}
                         onClick={() => setActiveIndicator(tab)}
-                        className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                          activeIndicator === tab ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                        className={`rounded-lg px-5 py-2 text-[11px] font-black tracking-widest transition-all ${
+                          activeIndicator === tab ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-gray-500 hover:text-gray-300'
                         }`}
                       >
                         {tab.toUpperCase()}
@@ -167,94 +333,255 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* 통합된 캔들 차트 */}
-                {chartData && (
-                  <CandlestickChart
-                    data={chartData.ohlcv}
-                    indicators={chartData.indicators}
-                    darvasBoxes={darvas}
-                    fibonacci={fibonacci ? { levels: fibonacci.levels } : undefined}
-                    weinstein={weinstein ?? undefined}
-                    scale={scale}
-                    showSMA={showSMA}
-                    showBollinger={showBollinger}
-                    showDarvas={showDarvas}
-                    showFibonacci={showFibonacci}
-                    showWeinstein={showWeinstein}
-                    activeIndicator={activeIndicator}
-                    onLoadMore={refetch}
-                    isRefetching={isRefetching}
-                  />
-                )}
+                <div className="mb-5 flex flex-wrap gap-8 px-2">
+                  <ToggleChip checked={showSMA} onChange={setShowSMA} label="SMA" />
+                  <ToggleChip checked={showBollinger} onChange={setShowBollinger} label="BOLL" />
+                  <ToggleChip checked={showDarvas} onChange={setShowDarvas} label="DARVAS" />
+                  <ToggleChip checked={showFibonacci} onChange={setShowFibonacci} label="FIBO" />
+                  <ToggleChip checked={showWeinstein} onChange={setShowWeinstein} label="STAGE" />
+                </div>
+
+                <div className="mb-6 grid gap-3 rounded-2xl border border-gray-800 bg-[#0b0e14] p-4 lg:grid-cols-[1fr_0.8fr]">
+                  <div>
+                    <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">SMA Settings</div>
+                    <div className="mt-2 text-sm text-gray-300">
+                      {timeframe.toUpperCase()} timeframe uses <span className="font-black text-white">
+                        {currentSmaConfigs.filter((config) => config.visible).map((config) => config.period).join(', ')}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">Header collapse and SMA configs are saved in localStorage</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-black tracking-[0.24em] text-gray-500 uppercase">Fibonacci Mode</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {(['auto', 'manual'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => setFibonacciMode(mode)}
+                          className={`rounded-lg px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] ${
+                            fibonacciMode === mode ? 'bg-amber-500 text-black' : 'bg-[#131722] text-gray-400'
+                          }`}
+                        >
+                          {mode}
+                        </button>
+                      ))}
+                      <select
+                        value={fibonacciTrend}
+                        onChange={(event) => setFibonacciTrend(event.target.value as FibonacciTrend)}
+                        className="rounded-lg border border-gray-800 bg-[#131722] px-3 py-2 text-[11px] font-black uppercase outline-none"
+                      >
+                        <option value="UP">UPTREND</option>
+                        <option value="DOWN">DOWNTREND</option>
+                      </select>
+                    </div>
+                    {fibonacciMode === 'manual' && (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <input
+                          type="number"
+                          value={manualSwingLow}
+                          onChange={(event) => setManualSwingLow(event.target.value)}
+                          placeholder="SWING LOW"
+                          className="rounded-lg border border-gray-800 bg-[#131722] px-3 py-2 text-xs font-black outline-none focus:border-amber-500"
+                        />
+                        <input
+                          type="number"
+                          value={manualSwingHigh}
+                          onChange={(event) => setManualSwingHigh(event.target.value)}
+                          placeholder="SWING HIGH"
+                          className="rounded-lg border border-gray-800 bg-[#131722] px-3 py-2 text-xs font-black outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <CandlestickChart
+                  data={chartData.ohlcv}
+                  indicators={chartData.indicators}
+                  darvasBoxes={darvas}
+                  fibonacci={fibonacci}
+                  weinstein={weinstein ?? undefined}
+                  relativeStrength={relativeStrength}
+                  scale={scale}
+                  smaConfigs={currentSmaConfigs}
+                  headerCollapsed={headerCollapsed}
+                  onToggleHeaderCollapsed={() => setHeaderCollapsed((current) => !current)}
+                  onSmaConfigsChange={handleSmaConfigsChange}
+                  showSMA={showSMA}
+                  showBollinger={showBollinger}
+                  showDarvas={showDarvas}
+                  showFibonacci={showFibonacci}
+                  showWeinstein={showWeinstein}
+                  activeIndicator={activeIndicator}
+                  onLoadOlder={fetchOlder}
+                  isFetchingOlder={isFetchingOlder}
+                  hasMoreBefore={hasMoreBefore}
+                />
               </div>
             )}
           </div>
 
-          {/* 오른쪽: 사이드 패널 */}
-          <div className="space-y-4">
-            <Watchlist />
-
-            {chartData && (
-              <FinancialMetrics
-                weinstein={weinstein ?? undefined}
-                financial={undefined}
-                signals={signals}
-              />
-            )}
-
-            <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-lg font-semibold mb-3">API Documentation</h3>
-              <a
-                href="http://localhost:8000/docs"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-400 hover:underline"
-              >
-                Swagger UI
-              </a>
-            </div>
+          <div className="space-y-6">
+            <Watchlist currentTicker={ticker} onSelectTicker={setTicker} />
+            <FinancialMetrics weinstein={weinstein} financial={financial} signals={signals} />
           </div>
         </div>
-
-        {chartLoading && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-gray-800 rounded-lg p-6">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-t-4 border-blue-500"></div>
-              <p className="mt-4 text-center">Loading chart data...</p>
-            </div>
-          </div>
-        )}
-
-        {chartError && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-red-900 rounded-lg p-6">
-              <p className="text-center text-lg font-semibold mb-2">Error</p>
-              <p className="text-center">{chartError}</p>
-              <button
-                onClick={() => window.location.reload()}
-                className="mt-4 w-full px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        )}
       </main>
+
+      {chartLoading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="flex flex-col items-center rounded-3xl border border-gray-800 bg-[#1e222d] p-10 shadow-2xl">
+            <div className="relative">
+              <div className="h-16 w-16 rounded-full border-4 border-blue-500/20" />
+              <div className="absolute left-0 top-0 h-16 w-16 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+            </div>
+            <p className="mt-6 text-sm font-black tracking-[0.2em] text-blue-500">INITIALIZING ENGINE</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-function getWeinsteinStageColor(stage: number): string {
-  switch (stage) {
-    case 1:
-      return COLORS.stage1
-    case 2:
-      return COLORS.stage2
-    case 3:
-      return COLORS.stage3
-    case 4:
-      return COLORS.stage4
-    default:
-      return 'transparent'
+function ToggleChip({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  label: string
+}) {
+  return (
+    <label className="group flex cursor-pointer items-center gap-3">
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="hidden" />
+      <div className={`flex h-5 w-5 items-center justify-center rounded-md border-2 transition-all ${checked ? 'border-blue-500 bg-blue-500' : 'border-gray-700 group-hover:border-gray-500'}`}>
+        {checked && <span className="text-[10px] text-white">✓</span>}
+      </div>
+      <span className={`text-[11px] font-black tracking-widest ${checked ? 'text-gray-100' : 'text-gray-600'}`}>{label}</span>
+    </label>
+  )
+}
+
+function buildDefaultSmaConfigs(periods: number[]) {
+  return periods.map((period, index) => ({
+    id: `sma-${period}-${index}`,
+    visible: true,
+    period,
+    color: DEFAULT_SMA_COLORS[index % DEFAULT_SMA_COLORS.length],
+    lineWidth: 2 as const,
+  }))
+}
+
+function buildDefaultSmaConfigsByTimeframe(): Record<Timeframe, SmaConfig[]> {
+  return {
+    daily: buildDefaultSmaConfigs(DEFAULT_SMA_PERIODS.daily),
+    weekly: buildDefaultSmaConfigs(DEFAULT_SMA_PERIODS.weekly),
+    monthly: buildDefaultSmaConfigs(DEFAULT_SMA_PERIODS.monthly),
   }
+}
+
+function normalizeSmaConfigs(configs: SmaConfig[] | undefined, fallbackPeriods: number[]) {
+  const source = Array.isArray(configs) && configs.length > 0 ? configs : buildDefaultSmaConfigs(fallbackPeriods)
+  const normalized: SmaConfig[] = []
+  const seenPeriods = new Set<number>()
+
+  source.forEach((config, index) => {
+    const period = Math.min(240, Math.max(2, Math.round(config.period)))
+    if (seenPeriods.has(period)) {
+      return
+    }
+
+    seenPeriods.add(period)
+    normalized.push({
+      id: config.id || `sma-${period}-${index}`,
+      visible: config.visible !== false,
+      period,
+      color: config.color || DEFAULT_SMA_COLORS[index % DEFAULT_SMA_COLORS.length],
+      lineWidth: config.lineWidth && [1, 2, 3, 4].includes(config.lineWidth) ? config.lineWidth : 2,
+    })
+  })
+
+  if (normalized.length === 0) {
+    return buildDefaultSmaConfigs(fallbackPeriods)
+  }
+
+  return normalized
+    .sort((left, right) => left.period - right.period)
+    .slice(0, 6)
+}
+
+function migrateLegacySettings(legacy: LegacyDashboardSettings): DashboardUiSettings {
+  const migratedSmaConfigsByTimeframe = buildDefaultSmaConfigsByTimeframe()
+
+  if (legacy.smaByTimeframe) {
+    ;(['daily', 'weekly', 'monthly'] as const).forEach((timeframe) => {
+      const legacyPeriods = legacy.smaByTimeframe?.[timeframe]
+      if (legacyPeriods && legacyPeriods.length > 0) {
+        migratedSmaConfigsByTimeframe[timeframe] = buildDefaultSmaConfigs(legacyPeriods)
+      }
+    })
+  }
+
+  return {
+    timeframe: legacy.timeframe ?? DEFAULT_SETTINGS.timeframe,
+    scale: legacy.scale ?? DEFAULT_SETTINGS.scale,
+    benchmarkTicker: legacy.benchmarkTicker ?? DEFAULT_SETTINGS.benchmarkTicker,
+    activeIndicator: legacy.activeIndicator ?? DEFAULT_SETTINGS.activeIndicator,
+    headerCollapsed: true,
+    smaConfigsByTimeframe: migratedSmaConfigsByTimeframe,
+    fibonacciMode: legacy.fibonacciMode ?? DEFAULT_SETTINGS.fibonacciMode,
+    fibonacciTrend: legacy.fibonacciTrend ?? DEFAULT_SETTINGS.fibonacciTrend,
+    manualSwingLow: legacy.manualSwingLow ?? DEFAULT_SETTINGS.manualSwingLow,
+    manualSwingHigh: legacy.manualSwingHigh ?? DEFAULT_SETTINGS.manualSwingHigh,
+  }
+}
+
+function loadDashboardSettings(): DashboardUiSettings {
+  if (typeof window === 'undefined') {
+    return DEFAULT_SETTINGS
+  }
+
+  try {
+    const current = window.localStorage.getItem(STORAGE_KEY)
+    if (current) {
+      const parsed = JSON.parse(current) as Partial<DashboardUiSettings>
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        smaConfigsByTimeframe: {
+          daily: normalizeSmaConfigs(parsed.smaConfigsByTimeframe?.daily, DEFAULT_SMA_PERIODS.daily),
+          weekly: normalizeSmaConfigs(parsed.smaConfigsByTimeframe?.weekly, DEFAULT_SMA_PERIODS.weekly),
+          monthly: normalizeSmaConfigs(parsed.smaConfigsByTimeframe?.monthly, DEFAULT_SMA_PERIODS.monthly),
+        },
+      }
+    }
+
+    const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (legacy) {
+      return migrateLegacySettings(JSON.parse(legacy) as LegacyDashboardSettings)
+    }
+
+    return DEFAULT_SETTINGS
+  } catch {
+    return DEFAULT_SETTINGS
+  }
+}
+
+function saveDashboardSettings(settings: DashboardUiSettings) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+}
+
+function getWeinsteinStageColor(stage: number): string {
+  const colors: Record<number, string> = {
+    1: COLORS.stage1,
+    2: COLORS.stage2,
+    3: COLORS.stage3,
+    4: COLORS.stage4,
+  }
+  return colors[stage] || '#374151'
 }
