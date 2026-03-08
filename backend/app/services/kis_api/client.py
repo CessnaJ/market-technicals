@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.services.kis_api.auth import kis_auth
 import logging
 import asyncio
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,19 @@ class KISAPIClient:
         self.retry_count = settings.KIS_RETRY_COUNT
         self.retry_delay = settings.KIS_RETRY_DELAY
         self._semaphore = asyncio.Semaphore(self.rate_limit)
+        self._throttle_lock = asyncio.Lock()
+        self._next_request_at = 0.0
+
+    async def _throttle(self):
+        """Enforce a real requests-per-second budget across all callers."""
+        interval = 1 / max(self.rate_limit, 1)
+        async with self._throttle_lock:
+            now = time.monotonic()
+            wait_for = self._next_request_at - now
+            if wait_for > 0:
+                await asyncio.sleep(wait_for)
+                now = time.monotonic()
+            self._next_request_at = now + interval
 
     async def _get_headers(self) -> Dict[str, str]:
         """Get headers with authorization token"""
@@ -60,6 +74,7 @@ class KISAPIClient:
         async with self._semaphore:
             for attempt in range(self.retry_count):
                 try:
+                    await self._throttle()
                     async with httpx.AsyncClient(verify=False) as client:
                         if method == "GET":
                             response = await client.get(
@@ -81,8 +96,15 @@ class KISAPIClient:
                         # Token expired, invalidate and retry
                         await kis_auth.invalidate_token()
                         headers = await self._get_headers()
+                    retry_after = e.response.headers.get("Retry-After")
                     if attempt < self.retry_count - 1:
-                        await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                        if e.response.status_code == 429 and retry_after:
+                            try:
+                                await asyncio.sleep(float(retry_after))
+                            except ValueError:
+                                await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                        else:
+                            await asyncio.sleep(self.retry_delay * (2 ** attempt))
                     else:
                         raise
 

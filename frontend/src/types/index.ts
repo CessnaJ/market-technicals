@@ -178,6 +178,34 @@ export interface StockProfileResponse {
   related_by_theme: RelatedThemeGroup[];
 }
 
+export interface PricePreloadFailure {
+  ticker: string;
+  name: string;
+  attempts: number;
+  last_error: string | null;
+  updated_at: string | null;
+}
+
+export interface PricePreloadStatusResponse {
+  total_jobs: number;
+  status_counts: Record<string, number>;
+  recent_failures: PricePreloadFailure[];
+  is_running: boolean;
+  max_attempts: number;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+}
+
+export interface PricePreloadAutoSyncResponse {
+  started: boolean;
+  already_running: boolean;
+  message: string;
+  total_jobs: number;
+  major_ticker_count: number;
+  is_running: boolean;
+  last_started_at: string | null;
+}
+
 export interface SmaConfig {
   id: string;
   visible: boolean;

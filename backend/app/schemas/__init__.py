@@ -8,6 +8,15 @@ from app.schemas.stock import (
     RelatedThemeGroup,
     StockProfileResponse,
     StockMasterSyncResponse,
+    PricePreloadSeedRequest,
+    PricePreloadSeedResponse,
+    PricePreloadRunRequest,
+    PricePreloadRunItem,
+    PricePreloadRunResponse,
+    PricePreloadFailure,
+    PricePreloadStatusResponse,
+    PricePreloadAutoSyncRequest,
+    PricePreloadAutoSyncResponse,
 )
 from app.schemas.ohlcv import (
     OHLCDaily, OHLCDailyCreate,
@@ -30,6 +39,10 @@ __all__ = [
     "Stock", "StockCreate", "StockUpdate",
     "StockSearchSuggestion", "StockSearchResponse",
     "StockTheme", "RelatedThemeGroup", "StockProfileResponse", "StockMasterSyncResponse",
+    "PricePreloadSeedRequest", "PricePreloadSeedResponse",
+    "PricePreloadRunRequest", "PricePreloadRunItem", "PricePreloadRunResponse",
+    "PricePreloadFailure", "PricePreloadStatusResponse",
+    "PricePreloadAutoSyncRequest", "PricePreloadAutoSyncResponse",
     # OHLCV
     "OHLCDaily", "OHLCDailyCreate",
     "OHLCWeekly", "OHLCWeeklyCreate",

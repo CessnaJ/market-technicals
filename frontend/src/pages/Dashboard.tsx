@@ -10,7 +10,7 @@ import { useFinancialMetrics } from '../hooks/useFinancialMetrics'
 import { useIndicators } from '../hooks/useIndicators'
 import { useRelativeStrength } from '../hooks/useRelativeStrength'
 import { useStockProfile } from '../hooks/useStockProfile'
-import { COLORS, SmaConfig } from '../types'
+import { COLORS, PricePreloadAutoSyncResponse, PricePreloadStatusResponse, SmaConfig } from '../types'
 
 type Timeframe = 'daily' | 'weekly' | 'monthly'
 type ScaleMode = 'linear' | 'log'
@@ -81,7 +81,9 @@ export default function Dashboard() {
   const [manualSwingHigh, setManualSwingHigh] = useState(storedSettings.manualSwingHigh)
   const [isSyncingData, setIsSyncingData] = useState(false)
   const [isSyncingMaster, setIsSyncingMaster] = useState(false)
+  const [isStartingUniverseSync, setIsStartingUniverseSync] = useState(false)
   const [masterRefreshKey, setMasterRefreshKey] = useState(0)
+  const [universeSyncStatus, setUniverseSyncStatus] = useState<PricePreloadStatusResponse | null>(null)
 
   const [showSMA, setShowSMA] = useState(true)
   const [showBollinger, setShowBollinger] = useState(true)
@@ -195,6 +197,22 @@ export default function Dashboard() {
     timeframe,
   ])
 
+  useEffect(() => {
+    void fetchUniverseSyncStatus()
+  }, [])
+
+  useEffect(() => {
+    if (!universeSyncStatus?.is_running) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      void fetchUniverseSyncStatus()
+    }, 4000)
+
+    return () => window.clearInterval(intervalId)
+  }, [universeSyncStatus?.is_running])
+
   const handleForceRefreshData = async () => {
     if (!ticker || isSyncingData) {
       return
@@ -225,6 +243,45 @@ export default function Dashboard() {
       console.error('Failed to sync stock master:', err)
     } finally {
       setIsSyncingMaster(false)
+    }
+  }
+
+  async function fetchUniverseSyncStatus() {
+    try {
+      const response = await apiClient.get<PricePreloadStatusResponse>('/stocks/preload/status')
+      setUniverseSyncStatus(response.data)
+      return response.data
+    } catch (err) {
+      console.error('Failed to fetch universe preload status:', err)
+      return null
+    }
+  }
+
+  async function handleStartUniverseSync() {
+    if (isStartingUniverseSync || universeSyncStatus?.is_running) {
+      return
+    }
+
+    setIsStartingUniverseSync(true)
+    try {
+      const response = await apiClient.post<PricePreloadAutoSyncResponse>('/stocks/preload/auto-sync', {
+        current_ticker: ticker,
+        benchmark_ticker: benchmarkTicker,
+        sync_master: true,
+        batch_size: 25,
+        sleep_ms: 100,
+        universe_target_days: 730,
+        major_target_days: 3650,
+        major_limit: 200,
+      })
+      if (response.data.started || response.data.already_running) {
+        setMasterRefreshKey((current) => current + 1)
+        await fetchUniverseSyncStatus()
+      }
+    } catch (err) {
+      console.error('Failed to start universe preload:', err)
+    } finally {
+      setIsStartingUniverseSync(false)
     }
   }
 
@@ -263,6 +320,18 @@ export default function Dashboard() {
               >
                 {isSyncingData ? 'SYNCING...' : 'FETCH DATA'}
               </button>
+              <button
+                onClick={handleStartUniverseSync}
+                disabled={isStartingUniverseSync || universeSyncStatus?.is_running}
+                title="전 종목 2년치 + 주요 종목 10년치 선적재"
+                className="rounded border border-emerald-500/30 bg-emerald-600/15 px-3 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-emerald-300 transition-colors hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isStartingUniverseSync
+                  ? 'STARTING...'
+                  : universeSyncStatus?.is_running
+                    ? `SYNC ${getCompletedJobs(universeSyncStatus)}/${universeSyncStatus.total_jobs || 0}`
+                    : '2Y/10Y SYNC'}
+              </button>
             </div>
           </div>
 
@@ -300,6 +369,24 @@ export default function Dashboard() {
       </header>
 
       <main className="mx-auto max-w-[1600px] p-4">
+        {universeSyncStatus && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-emerald-500/20 bg-emerald-900/10 px-4 py-3 text-xs text-emerald-200">
+            <span className={`h-2.5 w-2.5 rounded-full ${universeSyncStatus.is_running ? 'animate-pulse bg-emerald-400' : 'bg-gray-500'}`} />
+            <span className="font-black uppercase tracking-[0.18em]">
+              {universeSyncStatus.is_running ? 'Universe Sync Running' : 'Universe Sync Idle'}
+            </span>
+            <span>
+              Completed {getCompletedJobs(universeSyncStatus)} / {universeSyncStatus.total_jobs}
+            </span>
+            <span>
+              Pending {getStatusCount(universeSyncStatus, 'PENDING')}
+            </span>
+            <span>
+              Failed {getStatusCount(universeSyncStatus, 'FAILED')}
+            </span>
+          </div>
+        )}
+
         {chartError && (
           <div className="mb-4 flex items-center gap-3 rounded-lg border border-red-500/50 bg-red-900/30 p-4 text-sm text-red-400">
             <span className="h-2 w-2 animate-ping rounded-full bg-red-500" />
@@ -627,4 +714,12 @@ function getWeinsteinStageColor(stage: number): string {
     4: COLORS.stage4,
   }
   return colors[stage] || '#374151'
+}
+
+function getStatusCount(status: PricePreloadStatusResponse, key: string): number {
+  return status.status_counts[key] ?? 0
+}
+
+function getCompletedJobs(status: PricePreloadStatusResponse): number {
+  return getStatusCount(status, 'COMPLETED')
 }

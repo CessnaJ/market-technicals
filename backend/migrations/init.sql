@@ -102,6 +102,34 @@ CREATE TABLE IF NOT EXISTS watchlist (
 CREATE INDEX IF NOT EXISTS idx_watchlist_ticker ON watchlist(ticker);
 
 -- ============================
+-- 전 종목 가격 선적재 큐/상태
+-- ============================
+CREATE TABLE IF NOT EXISTS price_preload_jobs (
+    id                BIGSERIAL PRIMARY KEY,
+    ticker            VARCHAR(20) UNIQUE NOT NULL,
+    name              VARCHAR(120) NOT NULL,
+    market            VARCHAR(20),
+    target_days       INTEGER NOT NULL DEFAULT 730,
+    priority          BIGINT NOT NULL DEFAULT 0,
+    status            VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    daily_records     INTEGER NOT NULL DEFAULT 0,
+    weekly_records    INTEGER NOT NULL DEFAULT 0,
+    last_synced_from  DATE,
+    last_synced_to    DATE,
+    last_run_at       TIMESTAMPTZ,
+    started_at        TIMESTAMPTZ,
+    finished_at       TIMESTAMPTZ,
+    last_error        TEXT,
+    created_at        TIMESTAMPTZ DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_preload_jobs_status ON price_preload_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_price_preload_jobs_market ON price_preload_jobs(market);
+CREATE INDEX IF NOT EXISTS idx_price_preload_jobs_priority ON price_preload_jobs(priority DESC);
+
+-- ============================
 -- 지표 계산 캐시
 -- ============================
 CREATE TABLE IF NOT EXISTS indicator_cache (
@@ -157,4 +185,7 @@ END;
 $$ language 'plpgsql';
 
 CREATE TRIGGER update_stocks_updated_at BEFORE UPDATE ON stocks
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_price_preload_jobs_updated_at BEFORE UPDATE ON price_preload_jobs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
