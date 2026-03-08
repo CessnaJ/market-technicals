@@ -1,4 +1,5 @@
 from app.models.stock import Stock
+from app.models.stock_master import StockMaster, StockThemeMap
 from app.models.ohlcv import OHLCDaily, OHLCWeekly
 from app.models.financial import FinancialData
 from app.models.watchlist import Watchlist
@@ -7,6 +8,8 @@ from app.models.signals import Signal
 
 __all__ = [
     "Stock",
+    "StockMaster",
+    "StockThemeMap",
     "OHLCDaily",
     "OHLCWeekly",
     "FinancialData",

@@ -135,6 +135,49 @@ export interface RelativeStrengthData {
   series: RelativeStrengthPoint[];
 }
 
+export interface StockSearchSuggestion {
+  ticker: string;
+  name: string;
+  market: string | null;
+  sector: string | null;
+  industry: string | null;
+  match_type:
+    | 'ticker_exact'
+    | 'ticker_prefix'
+    | 'name_exact'
+    | 'name_prefix'
+    | 'name_contains'
+    | 'initials_prefix'
+    | 'initials_contains';
+}
+
+export interface StockSearchResponse {
+  master_ready: boolean;
+  suggestions: StockSearchSuggestion[];
+}
+
+export interface StockTheme {
+  code: string;
+  name: string;
+}
+
+export interface RelatedThemeGroup {
+  theme_code: string;
+  theme_name: string;
+  stocks: StockSearchSuggestion[];
+}
+
+export interface StockProfileResponse {
+  ticker: string;
+  name: string;
+  market: string | null;
+  sector: string | null;
+  industry: string | null;
+  themes: StockTheme[];
+  related_by_sector: StockSearchSuggestion[];
+  related_by_theme: RelatedThemeGroup[];
+}
+
 export interface SmaConfig {
   id: string;
   visible: boolean;

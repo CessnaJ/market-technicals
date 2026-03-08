@@ -3,11 +3,13 @@ import { useEffect, useMemo, useState } from 'react'
 import apiClient from '../api/client'
 import CandlestickChart from '../components/Chart/CandlestickChart'
 import FinancialMetrics from '../components/FinancialMetrics'
+import StockSearchInput from '../components/StockSearchInput'
 import Watchlist from '../components/Watchlist'
 import { useChartData } from '../hooks/useChartData'
 import { useFinancialMetrics } from '../hooks/useFinancialMetrics'
 import { useIndicators } from '../hooks/useIndicators'
 import { useRelativeStrength } from '../hooks/useRelativeStrength'
+import { useStockProfile } from '../hooks/useStockProfile'
 import { COLORS, SmaConfig } from '../types'
 
 type Timeframe = 'daily' | 'weekly' | 'monthly'
@@ -77,7 +79,9 @@ export default function Dashboard() {
   const [fibonacciTrend, setFibonacciTrend] = useState<FibonacciTrend>(storedSettings.fibonacciTrend)
   const [manualSwingLow, setManualSwingLow] = useState(storedSettings.manualSwingLow)
   const [manualSwingHigh, setManualSwingHigh] = useState(storedSettings.manualSwingHigh)
-  const [isSyncing, setIsSyncing] = useState(false)
+  const [isSyncingData, setIsSyncingData] = useState(false)
+  const [isSyncingMaster, setIsSyncingMaster] = useState(false)
+  const [masterRefreshKey, setMasterRefreshKey] = useState(0)
 
   const [showSMA, setShowSMA] = useState(true)
   const [showBollinger, setShowBollinger] = useState(true)
@@ -144,6 +148,16 @@ export default function Dashboard() {
   })
 
   const {
+    profile,
+    loading: profileLoading,
+    error: profileError,
+  } = useStockProfile({
+    ticker,
+    enabled: ticker.length > 0,
+    refreshKey: masterRefreshKey,
+  })
+
+  const {
     relativeStrength,
     refetch: refetchRelativeStrength,
   } = useRelativeStrength({
@@ -182,11 +196,11 @@ export default function Dashboard() {
   ])
 
   const handleForceRefreshData = async () => {
-    if (!ticker || isSyncing) {
+    if (!ticker || isSyncingData) {
       return
     }
 
-    setIsSyncing(true)
+    setIsSyncingData(true)
     try {
       await apiClient.post(`/fetch/${ticker}`, { force_refresh: true })
       await refetchChart()
@@ -194,7 +208,23 @@ export default function Dashboard() {
     } catch (err: any) {
       console.error('Failed to fetch data:', err)
     } finally {
-      setIsSyncing(false)
+      setIsSyncingData(false)
+    }
+  }
+
+  const handleSyncMaster = async () => {
+    if (isSyncingMaster) {
+      return
+    }
+
+    setIsSyncingMaster(true)
+    try {
+      await apiClient.post('/stocks/sync-master')
+      setMasterRefreshKey((current) => current + 1)
+    } catch (err: any) {
+      console.error('Failed to sync stock master:', err)
+    } finally {
+      setIsSyncingMaster(false)
     }
   }
 
@@ -217,18 +247,21 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="text"
+              <StockSearchInput
                 value={ticker}
-                onChange={(event) => setTicker(event.target.value.toUpperCase())}
-                className="w-44 rounded border border-gray-700 bg-[#1e222d] px-4 py-2 text-sm font-bold uppercase outline-none transition-all focus:border-blue-500"
+                placeholder="종목명 / 티커 / 초성"
+                onCommit={setTicker}
+                onSyncMaster={handleSyncMaster}
+                isSyncingMaster={isSyncingMaster}
+                refreshKey={masterRefreshKey}
+                className="w-56"
               />
               <button
                 onClick={handleForceRefreshData}
-                disabled={isSyncing || chartLoading}
+                disabled={isSyncingData || chartLoading}
                 className="rounded bg-blue-600 px-4 py-2 text-sm font-bold transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isSyncing ? 'SYNCING...' : 'FETCH DATA'}
+                {isSyncingData ? 'SYNCING...' : 'FETCH DATA'}
               </button>
             </div>
           </div>
@@ -253,12 +286,14 @@ export default function Dashboard() {
               <option value="log">LOG SCALE</option>
             </select>
 
-            <input
-              type="text"
+            <StockSearchInput
               value={benchmarkTicker}
-              onChange={(event) => setBenchmarkTicker(event.target.value.toUpperCase())}
               placeholder="BENCHMARK"
-              className="rounded border border-gray-700 bg-[#1e222d] px-3 py-2 text-xs font-black uppercase outline-none focus:border-blue-500"
+              onCommit={setBenchmarkTicker}
+              onSyncMaster={handleSyncMaster}
+              isSyncingMaster={isSyncingMaster}
+              refreshKey={masterRefreshKey}
+              className="w-full"
             />
           </div>
         </div>
@@ -423,7 +458,15 @@ export default function Dashboard() {
 
           <div className="space-y-6">
             <Watchlist currentTicker={ticker} onSelectTicker={setTicker} />
-            <FinancialMetrics weinstein={weinstein} financial={financial} signals={signals} />
+            <FinancialMetrics
+              weinstein={weinstein}
+              stockProfile={profile}
+              stockProfileLoading={profileLoading}
+              stockProfileError={profileError}
+              onSelectTicker={setTicker}
+              financial={financial}
+              signals={signals}
+            />
           </div>
         </div>
       </main>

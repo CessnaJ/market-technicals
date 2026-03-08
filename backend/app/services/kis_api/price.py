@@ -314,6 +314,7 @@ class KISPriceService:
             "change_sign": data.get("prdy_vrss_sign", ""),
             "change_rate": float(data.get("prdy_ctrt", 0)),
             "market": data.get("mrkt_clss", ""),
+            "industry_name": data.get("bstp_kor_isnm", "") or None,
         }
 
     async def fetch_historical_data(

@@ -1,4 +1,14 @@
-from app.schemas.stock import Stock, StockCreate, StockUpdate
+from app.schemas.stock import (
+    Stock,
+    StockCreate,
+    StockUpdate,
+    StockSearchSuggestion,
+    StockSearchResponse,
+    StockTheme,
+    RelatedThemeGroup,
+    StockProfileResponse,
+    StockMasterSyncResponse,
+)
 from app.schemas.ohlcv import (
     OHLCDaily, OHLCDailyCreate,
     OHLCWeekly, OHLCWeeklyCreate,
@@ -18,6 +28,8 @@ from app.schemas.financial import (
 __all__ = [
     # Stock
     "Stock", "StockCreate", "StockUpdate",
+    "StockSearchSuggestion", "StockSearchResponse",
+    "StockTheme", "RelatedThemeGroup", "StockProfileResponse", "StockMasterSyncResponse",
     # OHLCV
     "OHLCDaily", "OHLCDailyCreate",
     "OHLCWeekly", "OHLCWeeklyCreate",
