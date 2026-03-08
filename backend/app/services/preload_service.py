@@ -6,9 +6,10 @@ import logging
 import time
 from typing import Iterable
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+from app.core.config import settings
 from app.core.database import async_session_maker, engine
 from app.models import OHLCDaily, OHLCWeekly, PricePreloadJob, StockMaster, Watchlist
 from app.schemas import (
@@ -30,15 +31,19 @@ MAX_PRELOAD_ATTEMPTS = 3
 PROCESSING_STALE_MINUTES = 30
 PRELOAD_LOCK_KEY_1 = 31415
 PRELOAD_LOCK_KEY_2 = 27182
+MAX_PRELOAD_WORKERS = 5
 
 
 class PreloadService:
     def __init__(self):
         self._background_task: asyncio.Task | None = None
         self._background_lock = asyncio.Lock()
+        self._progress_lock = asyncio.Lock()
         self._lock_connection: AsyncConnection | None = None
         self._last_started_at: datetime | None = None
         self._last_finished_at: datetime | None = None
+        self._active_worker_count = 0
+        self._processed_since_last_log = 0
 
     def is_running(self) -> bool:
         return self._background_task is not None and not self._background_task.done()
@@ -127,6 +132,20 @@ class PreloadService:
         minutes, secs = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
+    def _get_elapsed_seconds(self) -> float:
+        if self._last_started_at is None:
+            return 0.0
+        return max((datetime.now() - self._last_started_at).total_seconds(), 0.0)
+
+    def _get_jobs_per_minute(self, resolved_jobs: int) -> float:
+        elapsed_seconds = self._get_elapsed_seconds()
+        if resolved_jobs <= 0 or elapsed_seconds <= 0:
+            return 0.0
+        return resolved_jobs / (elapsed_seconds / 60)
+
+    def _reset_progress_tracking(self) -> None:
+        self._processed_since_last_log = 0
+
     async def _get_progress_snapshot(self, db: AsyncSession) -> dict[str, int]:
         total_jobs = await db.scalar(select(func.count(PricePreloadJob.id)))
         pending = await db.scalar(select(func.count(PricePreloadJob.id)).where(PricePreloadJob.status == "PENDING"))
@@ -155,13 +174,10 @@ class PreloadService:
 
     async def _log_progress_summary(self, db: AsyncSession, *, event: str, batch_size: int | None = None):
         snapshot = await self._get_progress_snapshot(db)
-        elapsed_seconds = (
-            (datetime.now() - self._last_started_at).total_seconds()
-            if self._last_started_at is not None
-            else 0.0
-        )
+        elapsed_seconds = self._get_elapsed_seconds()
         resolved_jobs = snapshot["completed"] + snapshot["terminal_failed"]
         unresolved_jobs = snapshot["pending"] + snapshot["processing"] + snapshot["retryable_failed"]
+        jobs_per_minute = self._get_jobs_per_minute(resolved_jobs)
         eta_seconds = None
         if resolved_jobs > 0 and unresolved_jobs > 0 and elapsed_seconds > 0:
             jobs_per_second = resolved_jobs / elapsed_seconds
@@ -169,7 +185,7 @@ class PreloadService:
                 eta_seconds = unresolved_jobs / jobs_per_second
 
         logger.info(
-            "%s total=%s completed=%s pending=%s processing=%s retryable_failed=%s terminal_failed=%s resolved=%s batch_size=%s elapsed=%s eta=%s",
+            "%s total=%s completed=%s pending=%s processing=%s retryable_failed=%s terminal_failed=%s resolved=%s batch_size=%s workers=%s rate_per_min=%.2f elapsed=%s eta=%s",
             event,
             snapshot["total_jobs"],
             snapshot["completed"],
@@ -179,9 +195,38 @@ class PreloadService:
             snapshot["terminal_failed"],
             resolved_jobs,
             batch_size if batch_size is not None else "-",
+            self._active_worker_count,
+            jobs_per_minute,
             self._format_duration(elapsed_seconds),
             self._format_duration(eta_seconds),
         )
+
+    async def _count_resumable_jobs(self, db: AsyncSession) -> int:
+        resumable = await db.scalar(
+            select(func.count(PricePreloadJob.id)).where(
+                or_(
+                    PricePreloadJob.status == "PENDING",
+                    and_(
+                        PricePreloadJob.status == "FAILED",
+                        PricePreloadJob.attempts < MAX_PRELOAD_ATTEMPTS,
+                    ),
+                    PricePreloadJob.status == "PROCESSING",
+                )
+            )
+        )
+        return int(resumable or 0)
+
+    async def _maybe_log_progress(self, *, batch_size: int) -> None:
+        should_log = False
+        async with self._progress_lock:
+            self._processed_since_last_log += 1
+            if self._processed_since_last_log >= max(batch_size, 1):
+                self._processed_since_last_log = 0
+                should_log = True
+
+        if should_log:
+            async with async_session_maker() as db:
+                await self._log_progress_summary(db, event="PRELOAD_BATCH_DONE", batch_size=batch_size)
 
     async def seed_universe(
         self,
@@ -413,6 +458,18 @@ class PreloadService:
                 .limit(failure_limit)
             )
         ).scalars().all()
+        terminal_failed = await db.scalar(
+            select(func.count(PricePreloadJob.id)).where(
+                PricePreloadJob.status == "FAILED",
+                PricePreloadJob.attempts >= MAX_PRELOAD_ATTEMPTS,
+            )
+        )
+        resolved_jobs = int(status_counts.get("COMPLETED", 0) + int(terminal_failed or 0))
+        unresolved_jobs = int(total_jobs or 0) - resolved_jobs
+        jobs_per_minute = self._get_jobs_per_minute(resolved_jobs)
+        eta_seconds = None
+        if jobs_per_minute > 0 and unresolved_jobs > 0:
+            eta_seconds = int((unresolved_jobs / jobs_per_minute) * 60)
 
         return PricePreloadStatusResponse(
             total_jobs=total_jobs or 0,
@@ -429,6 +486,9 @@ class PreloadService:
             ],
             is_running=is_running,
             max_attempts=MAX_PRELOAD_ATTEMPTS,
+            active_worker_count=self._active_worker_count,
+            jobs_per_minute=jobs_per_minute,
+            eta_seconds=eta_seconds,
             last_started_at=self._last_started_at,
             last_finished_at=self._last_finished_at,
         )
@@ -438,30 +498,137 @@ class PreloadService:
         db: AsyncSession,
         *,
         stale_minutes: int = PROCESSING_STALE_MINUTES,
+        force_all: bool = False,
     ) -> int:
-        cutoff = datetime.now() - timedelta(minutes=stale_minutes)
+        conditions = [PricePreloadJob.status == "PROCESSING"]
+        if not force_all:
+            cutoff = datetime.now() - timedelta(minutes=stale_minutes)
+            conditions.extend(
+                [
+                    PricePreloadJob.started_at.is_not(None),
+                    PricePreloadJob.started_at < cutoff,
+                ]
+            )
+
+        recovery_reason = (
+            "Recovered from interrupted preload runner"
+            if force_all
+            else f"Recovered from stale PROCESSING state after {stale_minutes} minutes"
+        )
         result = await db.execute(
             update(PricePreloadJob)
-            .where(
-                PricePreloadJob.status == "PROCESSING",
-                PricePreloadJob.started_at.is_not(None),
-                PricePreloadJob.started_at < cutoff,
-            )
+            .where(*conditions)
             .values(
                 status="PENDING",
                 finished_at=datetime.now(),
-                last_error=f"Recovered from stale PROCESSING state after {stale_minutes} minutes",
+                last_error=recovery_reason,
             )
         )
         await db.commit()
         recovered = result.rowcount or 0
         if recovered > 0:
-            logger.warning(
-                "PRELOAD_RECOVER_STALE recovered=%s stale_minutes=%s",
-                recovered,
-                stale_minutes,
-            )
+            if force_all:
+                logger.warning(
+                    "PRELOAD_RECOVER_INTERRUPTED recovered=%s",
+                    recovered,
+                )
+            else:
+                logger.warning(
+                    "PRELOAD_RECOVER_STALE recovered=%s stale_minutes=%s",
+                    recovered,
+                    stale_minutes,
+                )
         return recovered
+
+    async def _claim_next_job(
+        self,
+        db: AsyncSession,
+        *,
+        markets: list[str] | None = None,
+        statuses: list[str] | None = None,
+    ) -> PricePreloadJob | None:
+        normalized_markets = self._normalize_markets(markets)
+        normalized_statuses = [status.upper() for status in (statuses or DEFAULT_PRELOAD_STATUSES)]
+
+        query = select(PricePreloadJob).where(
+            PricePreloadJob.status.in_(normalized_statuses),
+            PricePreloadJob.attempts < MAX_PRELOAD_ATTEMPTS,
+        )
+        if normalized_markets:
+            query = query.where(PricePreloadJob.market.in_(normalized_markets))
+        query = (
+            query.order_by(PricePreloadJob.priority.desc(), PricePreloadJob.ticker.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+
+        job = (await db.execute(query)).scalars().first()
+        if job is None:
+            return None
+
+        now = datetime.now()
+        job.status = "PROCESSING"
+        job.started_at = now
+        job.last_run_at = now
+        job.finished_at = None
+        job.attempts = (job.attempts or 0) + 1
+        job.last_error = None
+        await db.commit()
+        await db.refresh(job)
+        return job
+
+    async def _process_claimed_job(
+        self,
+        db: AsyncSession,
+        *,
+        job: PricePreloadJob,
+        use_cache: bool,
+        force_refresh: bool,
+    ) -> PricePreloadRunItem:
+        job_timer = time.perf_counter()
+        try:
+            result = await self._process_job(
+                db,
+                job_id=job.id,
+                use_cache=use_cache,
+                force_refresh=force_refresh,
+            )
+            logger.info(
+                "PRELOAD_JOB_%s ticker=%s name=%s attempt=%s target_days=%s daily_records=%s weekly_records=%s duration=%s",
+                result.status,
+                result.ticker,
+                result.name,
+                job.attempts,
+                job.target_days,
+                result.daily_records,
+                result.weekly_records,
+                self._format_duration(time.perf_counter() - job_timer),
+            )
+            return result
+        except Exception as exc:
+            logger.exception("❌ [%s] 선적재 배치 실패", job.ticker)
+            await db.rollback()
+            failed_job = await db.scalar(select(PricePreloadJob).where(PricePreloadJob.id == job.id))
+            if failed_job is not None:
+                failed_job.status = "FAILED"
+                failed_job.finished_at = datetime.now()
+                failed_job.last_error = str(exc)[:500]
+                await db.commit()
+            logger.error(
+                "PRELOAD_JOB_FAILED ticker=%s name=%s attempt=%s target_days=%s duration=%s error=%s",
+                job.ticker,
+                job.name,
+                job.attempts,
+                job.target_days,
+                self._format_duration(time.perf_counter() - job_timer),
+                str(exc)[:500],
+            )
+            return PricePreloadRunItem(
+                ticker=job.ticker,
+                name=job.name,
+                status="FAILED",
+                error=str(exc)[:500],
+            )
 
     async def run_batch(
         self,
@@ -485,7 +652,10 @@ class PreloadService:
                 results=[],
             )
 
-        await self.recover_stale_processing_jobs(db)
+        await self.recover_stale_processing_jobs(
+            db,
+            force_all=not bypass_runner_lock,
+        )
 
         normalized_markets = self._normalize_markets(markets)
         normalized_statuses = [status.upper() for status in (statuses or DEFAULT_PRELOAD_STATUSES)]
@@ -523,7 +693,6 @@ class PreloadService:
 
         for job in jobs:
             now = datetime.now()
-            job_timer = time.perf_counter()
             job.status = "PROCESSING"
             job.started_at = now
             job.last_run_at = now
@@ -532,58 +701,19 @@ class PreloadService:
             job.last_error = None
             await db.commit()
 
-            try:
-                result = await self._process_job(
-                    db,
-                    job_id=job.id,
-                    use_cache=use_cache,
-                    force_refresh=force_refresh,
-                )
-                results.append(result)
-                logger.info(
-                    "PRELOAD_JOB_%s ticker=%s name=%s attempt=%s target_days=%s daily_records=%s weekly_records=%s duration=%s",
-                    result.status,
-                    result.ticker,
-                    result.name,
-                    job.attempts,
-                    job.target_days,
-                    result.daily_records,
-                    result.weekly_records,
-                    self._format_duration(time.perf_counter() - job_timer),
-                )
-                if result.status == "COMPLETED":
-                    completed += 1
-                elif result.status == "FAILED":
-                    failed += 1
-                else:
-                    skipped += 1
-            except Exception as exc:
-                logger.exception("❌ [%s] 선적재 배치 실패", job.ticker)
-                await db.rollback()
-                failed_job = await db.scalar(select(PricePreloadJob).where(PricePreloadJob.id == job.id))
-                if failed_job is not None:
-                    failed_job.status = "FAILED"
-                    failed_job.finished_at = datetime.now()
-                    failed_job.last_error = str(exc)[:500]
-                    await db.commit()
+            result = await self._process_claimed_job(
+                db,
+                job=job,
+                use_cache=use_cache,
+                force_refresh=force_refresh,
+            )
+            results.append(result)
+            if result.status == "COMPLETED":
+                completed += 1
+            elif result.status == "FAILED":
                 failed += 1
-                results.append(
-                    PricePreloadRunItem(
-                        ticker=job.ticker,
-                        name=job.name,
-                        status="FAILED",
-                        error=str(exc)[:500],
-                    )
-                )
-                logger.error(
-                    "PRELOAD_JOB_FAILED ticker=%s name=%s attempt=%s target_days=%s duration=%s error=%s",
-                    job.ticker,
-                    job.name,
-                    job.attempts,
-                    job.target_days,
-                    self._format_duration(time.perf_counter() - job_timer),
-                    str(exc)[:500],
-                )
+            else:
+                skipped += 1
 
             if sleep_ms > 0:
                 await asyncio.sleep(sleep_ms / 1000)
@@ -606,11 +736,13 @@ class PreloadService:
         benchmark_ticker: str | None = None,
         sync_master: bool = True,
         batch_size: int = 25,
-        sleep_ms: int = 100,
+        sleep_ms: int = 0,
+        worker_count: int = 3,
         universe_target_days: int = 730,
         major_target_days: int = 3650,
         major_limit: int = 200,
     ) -> PricePreloadAutoSyncResponse:
+        worker_count = max(1, min(worker_count, MAX_PRELOAD_WORKERS))
         async with self._background_lock:
             async with async_session_maker() as db:
                 if await self.is_global_runner_active(db):
@@ -622,10 +754,11 @@ class PreloadService:
                         total_jobs=status.total_jobs,
                         major_ticker_count=0,
                         is_running=True,
+                        worker_count=status.active_worker_count,
                         last_started_at=self._last_started_at,
                     )
 
-                await self.recover_stale_processing_jobs(db)
+                await self.recover_stale_processing_jobs(db, force_all=True)
 
             acquired = await self._acquire_runner_lock()
             if not acquired:
@@ -638,6 +771,7 @@ class PreloadService:
                     total_jobs=status.total_jobs,
                     major_ticker_count=0,
                     is_running=True,
+                    worker_count=status.active_worker_count,
                     last_started_at=self._last_started_at,
                 )
 
@@ -668,14 +802,17 @@ class PreloadService:
 
                 self._last_started_at = datetime.now()
                 self._last_finished_at = None
+                self._active_worker_count = worker_count
+                self._reset_progress_tracking()
                 logger.info(
-                    "PRELOAD_AUTO_SYNC_STARTED total_jobs=%s universe_target_days=%s major_target_days=%s major_ticker_count=%s batch_size=%s sleep_ms=%s current_ticker=%s benchmark_ticker=%s",
+                    "PRELOAD_AUTO_SYNC_STARTED total_jobs=%s universe_target_days=%s major_target_days=%s major_ticker_count=%s batch_size=%s sleep_ms=%s worker_count=%s current_ticker=%s benchmark_ticker=%s",
                     universe_result.total_jobs,
                     universe_target_days,
                     major_target_days,
                     len(major_tickers),
                     batch_size,
                     sleep_ms,
+                    worker_count,
                     (current_ticker or "-").upper(),
                     (benchmark_ticker or "-").upper(),
                 )
@@ -683,6 +820,7 @@ class PreloadService:
                     self._run_auto_sync_loop(
                         batch_size=batch_size,
                         sleep_ms=sleep_ms,
+                        worker_count=worker_count,
                     )
                 )
 
@@ -693,11 +831,55 @@ class PreloadService:
                     total_jobs=universe_result.total_jobs,
                     major_ticker_count=len(major_tickers),
                     is_running=True,
+                    worker_count=worker_count,
                     last_started_at=self._last_started_at,
                 )
             except Exception:
+                self._active_worker_count = 0
                 await self._release_runner_lock()
                 raise
+
+    async def resume_auto_sync_if_needed(self) -> bool:
+        if not settings.PRELOAD_AUTO_RESUME:
+            return False
+
+        async with self._background_lock:
+            async with async_session_maker() as db:
+                if await self.is_global_runner_active(db):
+                    return False
+
+                await self.recover_stale_processing_jobs(db, force_all=True)
+                resumable_jobs = await self._count_resumable_jobs(db)
+                if resumable_jobs == 0:
+                    return False
+
+            acquired = await self._acquire_runner_lock()
+            if not acquired:
+                return False
+
+            batch_size = settings.PRELOAD_DEFAULT_BATCH_SIZE
+            sleep_ms = settings.PRELOAD_DEFAULT_SLEEP_MS
+            worker_count = max(1, min(settings.PRELOAD_DEFAULT_WORKER_COUNT, MAX_PRELOAD_WORKERS))
+
+            self._last_started_at = datetime.now()
+            self._last_finished_at = None
+            self._active_worker_count = worker_count
+            self._reset_progress_tracking()
+            logger.info(
+                "PRELOAD_AUTO_RESUME_STARTED resumable_jobs=%s batch_size=%s sleep_ms=%s worker_count=%s",
+                resumable_jobs,
+                batch_size,
+                sleep_ms,
+                worker_count,
+            )
+            self._background_task = asyncio.create_task(
+                self._run_auto_sync_loop(
+                    batch_size=batch_size,
+                    sleep_ms=sleep_ms,
+                    worker_count=worker_count,
+                )
+            )
+            return True
 
     async def _select_major_tickers(
         self,
@@ -734,22 +916,25 @@ class PreloadService:
         *,
         batch_size: int,
         sleep_ms: int,
+        worker_count: int,
     ) -> None:
         try:
-            while True:
-                async with async_session_maker() as db:
-                    result = await self.run_batch(
-                        db,
+            logger.info(
+                "PRELOAD_WORKERS_STARTED worker_count=%s batch_size=%s sleep_ms=%s",
+                worker_count,
+                batch_size,
+                sleep_ms,
+            )
+            await asyncio.gather(
+                *[
+                    self._run_worker_loop(
+                        worker_id=index + 1,
                         batch_size=batch_size,
-                        statuses=DEFAULT_PRELOAD_STATUSES,
-                        use_cache=False,
-                        force_refresh=False,
                         sleep_ms=sleep_ms,
-                        bypass_runner_lock=True,
                     )
-                if result.processed == 0:
-                    break
-                await asyncio.sleep(0.25)
+                    for index in range(worker_count)
+                ]
+            )
         except Exception:
             logger.exception("❌ Universe preload background loop failed")
         finally:
@@ -757,7 +942,44 @@ class PreloadService:
             async with async_session_maker() as db:
                 await self._log_progress_summary(db, event="PRELOAD_AUTO_SYNC_FINISHED")
             self._background_task = None
+            self._active_worker_count = 0
             await self._release_runner_lock()
+
+    async def _run_worker_loop(
+        self,
+        *,
+        worker_id: int,
+        batch_size: int,
+        sleep_ms: int,
+    ) -> None:
+        while True:
+            async with async_session_maker() as db:
+                job = await self._claim_next_job(
+                    db,
+                    statuses=DEFAULT_PRELOAD_STATUSES,
+                )
+            if job is None:
+                logger.info("PRELOAD_WORKER_IDLE worker_id=%s", worker_id)
+                return
+
+            async with async_session_maker() as db:
+                result = await self._process_claimed_job(
+                    db,
+                    job=job,
+                    use_cache=False,
+                    force_refresh=False,
+                )
+
+            logger.info(
+                "PRELOAD_WORKER_TICK worker_id=%s ticker=%s status=%s",
+                worker_id,
+                result.ticker,
+                result.status,
+            )
+            await self._maybe_log_progress(batch_size=batch_size)
+
+            if sleep_ms > 0:
+                await asyncio.sleep(sleep_ms / 1000)
 
     async def _process_job(
         self,

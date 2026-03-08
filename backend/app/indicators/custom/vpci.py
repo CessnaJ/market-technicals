@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any
 from app.indicators.basic.moving_average import MovingAverages
+from app.indicators.basic.volume import Volume
 
 
 class VPCI:
@@ -62,17 +63,18 @@ class VPCI:
         vpr = vwma_short / sma_short
 
         # Calculate VM (Volume Multiplier)
-        vol_ma_short = MovingAverages.volume_ma(volume, self.short_period)
-        vol_ma_long = MovingAverages.volume_ma(volume, self.long_period)
-        vm = vol_ma_short / vol_ma_long
+        vol_ma_short = Volume.volume_ma(volume, self.short_period)
+        vol_ma_long = Volume.volume_ma(volume, self.long_period)
+        vm = vol_ma_short / vol_ma_long.replace(0, np.nan)
 
         # Calculate Alpha (volatility smoothing)
         close_std = close.rolling(window=self.long_period).std()
         volume_std = volume.rolling(window=self.long_period).std()
-        alpha = close_std / volume_std if volume_std != 0 else 1.0
+        alpha = close_std / volume_std.replace(0, np.nan)
+        alpha = alpha.replace([np.inf, -np.inf], np.nan).fillna(1.0)
 
         # Calculate VPCI
-        vpci = (vpc * vpr * vm) / alpha
+        vpci = ((vpc * vpr * vm) / alpha).replace([np.inf, -np.inf], np.nan)
 
         # Determine signal
         signal = self._determine_signal(vpc, vpci)

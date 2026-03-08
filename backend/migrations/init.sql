@@ -130,6 +130,57 @@ CREATE INDEX IF NOT EXISTS idx_price_preload_jobs_market ON price_preload_jobs(m
 CREATE INDEX IF NOT EXISTS idx_price_preload_jobs_priority ON price_preload_jobs(priority DESC);
 
 -- ============================
+-- 스크리너 실행/결과 캐시
+-- ============================
+CREATE TABLE IF NOT EXISTS screening_runs (
+    id                  BIGSERIAL PRIMARY KEY,
+    preset              VARCHAR(50) NOT NULL,
+    request_hash        VARCHAR(64) NOT NULL,
+    status              VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    benchmark_ticker    VARCHAR(20) NOT NULL,
+    filters_json        JSONB NOT NULL DEFAULT '{}',
+    started_at          TIMESTAMPTZ,
+    finished_at         TIMESTAMPTZ,
+    total_candidates    INTEGER NOT NULL DEFAULT 0,
+    processed_candidates INTEGER NOT NULL DEFAULT 0,
+    matched_count       INTEGER NOT NULL DEFAULT 0,
+    summary_json        JSONB NOT NULL DEFAULT '{}',
+    error_message       TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_screening_runs_request_hash ON screening_runs(request_hash);
+CREATE INDEX IF NOT EXISTS idx_screening_runs_status ON screening_runs(status);
+CREATE INDEX IF NOT EXISTS idx_screening_runs_preset ON screening_runs(preset);
+
+CREATE TABLE IF NOT EXISTS screening_results (
+    id                    BIGSERIAL PRIMARY KEY,
+    run_id                BIGINT NOT NULL REFERENCES screening_runs(id) ON DELETE CASCADE,
+    ticker                VARCHAR(20) NOT NULL,
+    name                  VARCHAR(120) NOT NULL,
+    score                 DOUBLE PRECISION NOT NULL,
+    rank                  INTEGER NOT NULL,
+    sector                VARCHAR(120),
+    industry              VARCHAR(120),
+    stage_label           VARCHAR(50) NOT NULL,
+    weeks_since_stage2_start INTEGER,
+    distance_to_30w_pct   DOUBLE PRECISION,
+    ma30w_slope_pct       DOUBLE PRECISION,
+    mansfield_rs          DOUBLE PRECISION,
+    vpci_value            DOUBLE PRECISION,
+    volume_ratio          DOUBLE PRECISION,
+    matched_filters_json  JSONB NOT NULL DEFAULT '[]',
+    failed_filters_json   JSONB NOT NULL DEFAULT '[]',
+    notes_json            JSONB NOT NULL DEFAULT '{}',
+    created_at            TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (run_id, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_screening_results_run_id ON screening_results(run_id);
+CREATE INDEX IF NOT EXISTS idx_screening_results_rank ON screening_results(run_id, rank);
+
+-- ============================
 -- 지표 계산 캐시
 -- ============================
 CREATE TABLE IF NOT EXISTS indicator_cache (
@@ -188,4 +239,7 @@ CREATE TRIGGER update_stocks_updated_at BEFORE UPDATE ON stocks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_price_preload_jobs_updated_at BEFORE UPDATE ON price_preload_jobs
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_screening_runs_updated_at BEFORE UPDATE ON screening_runs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

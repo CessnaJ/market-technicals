@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
 import CandlestickChart from '../components/Chart/CandlestickChart'
@@ -66,9 +67,11 @@ const DEFAULT_SETTINGS: DashboardUiSettings = {
 }
 
 export default function Dashboard() {
+  const [searchParams] = useSearchParams()
   const [storedSettings] = useState(loadDashboardSettings)
+  const initialTicker = (searchParams.get('ticker') || '010950').trim().toUpperCase()
 
-  const [ticker, setTicker] = useState('010950')
+  const [ticker, setTicker] = useState(initialTicker || '010950')
   const [timeframe, setTimeframe] = useState<Timeframe>(storedSettings.timeframe)
   const [scale, setScale] = useState<ScaleMode>(storedSettings.scale)
   const [benchmarkTicker, setBenchmarkTicker] = useState(storedSettings.benchmarkTicker)
@@ -172,6 +175,13 @@ export default function Dashboard() {
   })
 
   useEffect(() => {
+    const nextTicker = (searchParams.get('ticker') || '').trim().toUpperCase()
+    if (nextTicker && nextTicker !== ticker) {
+      setTicker(nextTicker)
+    }
+  }, [searchParams, ticker])
+
+  useEffect(() => {
     saveDashboardSettings({
       timeframe,
       scale,
@@ -269,7 +279,8 @@ export default function Dashboard() {
         benchmark_ticker: benchmarkTicker,
         sync_master: true,
         batch_size: 25,
-        sleep_ms: 100,
+        sleep_ms: 0,
+        worker_count: 3,
         universe_target_days: 730,
         major_target_days: 3650,
         major_limit: 200,
@@ -304,6 +315,12 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <Link
+                to="/screener"
+                className="rounded border border-amber-500/30 bg-amber-600/10 px-3 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-amber-300 transition-colors hover:bg-amber-600/20"
+              >
+                Screener
+              </Link>
               <StockSearchInput
                 value={ticker}
                 placeholder="종목명 / 티커 / 초성"
@@ -383,6 +400,15 @@ export default function Dashboard() {
             </span>
             <span>
               Failed {getStatusCount(universeSyncStatus, 'FAILED')}
+            </span>
+            <span>
+              Workers {universeSyncStatus.active_worker_count}
+            </span>
+            <span>
+              Rate {universeSyncStatus.jobs_per_minute.toFixed(1)}/min
+            </span>
+            <span>
+              ETA {formatEtaSeconds(universeSyncStatus.eta_seconds)}
             </span>
           </div>
         )}
@@ -722,4 +748,16 @@ function getStatusCount(status: PricePreloadStatusResponse, key: string): number
 
 function getCompletedJobs(status: PricePreloadStatusResponse): number {
   return getStatusCount(status, 'COMPLETED')
+}
+
+function formatEtaSeconds(value: number | null): string {
+  if (value == null || value < 0) {
+    return '-'
+  }
+
+  const totalSeconds = Math.floor(value)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }

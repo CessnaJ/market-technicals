@@ -1,4 +1,3 @@
-import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import date, datetime, timedelta
 from app.services.kis_api.client import kis_client
@@ -172,8 +171,6 @@ class KISPriceService:
                     else:
                         break
 
-                    # API Rate Limit (초당 20건 제한 등) 고려하여 약간 대기
-                    await asyncio.sleep(0.1)
                 else:
                     break
 

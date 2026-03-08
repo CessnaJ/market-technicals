@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     KIS_RETRY_COUNT: int = 3
     KIS_RETRY_DELAY: float = 0.5  # seconds
 
+    # Universe preload defaults
+    PRELOAD_AUTO_RESUME: bool = True
+    PRELOAD_DEFAULT_BATCH_SIZE: int = 25
+    PRELOAD_DEFAULT_SLEEP_MS: int = 0
+    PRELOAD_DEFAULT_WORKER_COUNT: int = 3
+
     class Config:
         env_file = ".env"
         case_sensitive = True

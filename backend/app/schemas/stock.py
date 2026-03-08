@@ -141,6 +141,9 @@ class PricePreloadStatusResponse(BaseModel):
     recent_failures: list[PricePreloadFailure]
     is_running: bool = False
     max_attempts: int = 3
+    active_worker_count: int = 0
+    jobs_per_minute: float = 0.0
+    eta_seconds: Optional[int] = None
     last_started_at: Optional[datetime] = None
     last_finished_at: Optional[datetime] = None
 
@@ -150,7 +153,8 @@ class PricePreloadAutoSyncRequest(BaseModel):
     benchmark_ticker: Optional[str] = None
     sync_master: bool = True
     batch_size: int = Field(25, ge=1, le=500)
-    sleep_ms: int = Field(100, ge=0, le=5000)
+    sleep_ms: int = Field(0, ge=0, le=5000)
+    worker_count: int = Field(3, ge=1, le=5)
     universe_target_days: int = Field(730, ge=30, le=3650)
     major_target_days: int = Field(3650, ge=365, le=3650)
     major_limit: int = Field(200, ge=1, le=1000)
@@ -163,4 +167,5 @@ class PricePreloadAutoSyncResponse(BaseModel):
     total_jobs: int
     major_ticker_count: int
     is_running: bool
+    worker_count: int = 0
     last_started_at: Optional[datetime] = None

@@ -192,6 +192,9 @@ export interface PricePreloadStatusResponse {
   recent_failures: PricePreloadFailure[];
   is_running: boolean;
   max_attempts: number;
+  active_worker_count: number;
+  jobs_per_minute: number;
+  eta_seconds: number | null;
   last_started_at: string | null;
   last_finished_at: string | null;
 }
@@ -203,7 +206,90 @@ export interface PricePreloadAutoSyncResponse {
   total_jobs: number;
   major_ticker_count: number;
   is_running: boolean;
+  worker_count: number;
   last_started_at: string | null;
+}
+
+export type ScreeningFilterName =
+  | 'vpci_positive'
+  | 'rs_positive'
+  | 'volume_confirmed'
+  | 'not_extended';
+
+export interface ScreeningFilterConfig {
+  preset: 'weinstein_stage2_start';
+  benchmark_ticker: string;
+  include_filters: ScreeningFilterName[];
+  stage_start_window_weeks: number;
+  max_distance_to_30w_pct: number;
+  volume_ratio_min: number;
+  exclude_instruments: boolean;
+}
+
+export interface ScreeningSummaryItem {
+  name: string;
+  count: number;
+}
+
+export interface ScreeningSummary {
+  sector_counts: ScreeningSummaryItem[];
+  industry_counts: ScreeningSummaryItem[];
+  score_buckets: ScreeningSummaryItem[];
+  excluded_instruments: number;
+  insufficient_data: number;
+  filtered_out: number;
+  total_evaluated: number;
+}
+
+export interface ScreeningRunStatusResponse {
+  scan_id: number;
+  preset: 'weinstein_stage2_start';
+  request_hash: string;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  benchmark_ticker: string;
+  filters: ScreeningFilterConfig;
+  total_candidates: number;
+  processed_candidates: number;
+  matched_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+  summary: ScreeningSummary;
+  error_message: string | null;
+  is_cached: boolean;
+  cached_from_scan_id: number | null;
+}
+
+export interface ScreeningScanCreateResponse extends ScreeningRunStatusResponse {
+  started: boolean;
+  already_running: boolean;
+  message: string;
+}
+
+export interface ScreeningResultRow {
+  ticker: string;
+  name: string;
+  score: number;
+  rank: number;
+  sector: string | null;
+  industry: string | null;
+  stage_label: string;
+  weeks_since_stage2_start: number | null;
+  distance_to_30w_pct: number | null;
+  ma30w_slope_pct: number | null;
+  mansfield_rs: number | null;
+  vpci_value: number | null;
+  volume_ratio: number | null;
+  matched_filters: string[];
+  failed_filters: string[];
+  notes: Record<string, any>;
+}
+
+export interface ScreeningResultsResponse {
+  scan_id: number;
+  total_count: number;
+  limit: number;
+  offset: number;
+  results: ScreeningResultRow[];
 }
 
 export interface SmaConfig {

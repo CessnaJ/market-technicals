@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.redis_client import redis_client
+from app.services.preload_service import preload_service
 from decimal import Decimal
 import json
 import logging
@@ -24,6 +25,9 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 기술적 분석 대시보드 API 시작 중...")
     await init_db()
     logger.info("🗄️ 데이터베이스 초기화 완료")
+    resumed = await preload_service.resume_auto_sync_if_needed()
+    if resumed:
+        logger.info("🔄 중단된 universe preload 작업 자동 재개")
     yield
     # Shutdown
     logger.info("🛑 서버 종료 중...")

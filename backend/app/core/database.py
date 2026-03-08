@@ -39,5 +39,5 @@ async def init_db():
     """Initialize database tables"""
     async with engine.begin() as conn:
         # Import all models to ensure they are registered with Base
-        from app.models import stock, stock_master, preload, ohlcv, financial, watchlist, indicator_cache, signals
+        from app.models import stock, stock_master, preload, screening, ohlcv, financial, watchlist, indicator_cache, signals
         await conn.run_sync(Base.metadata.create_all)

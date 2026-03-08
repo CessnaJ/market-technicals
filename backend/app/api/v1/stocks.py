@@ -104,6 +104,7 @@ async def start_price_preload_auto_sync(
         sync_master=payload.sync_master,
         batch_size=payload.batch_size,
         sleep_ms=payload.sleep_ms,
+        worker_count=payload.worker_count,
         universe_target_days=payload.universe_target_days,
         major_target_days=payload.major_target_days,
         major_limit=payload.major_limit,

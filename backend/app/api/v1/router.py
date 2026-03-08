@@ -1,11 +1,12 @@
 from fastapi import APIRouter
-from app.api.v1 import watchlist, fetch, chart, signals, indicators, financial, stocks
+from app.api.v1 import watchlist, fetch, chart, signals, indicators, financial, screener, stocks
 
 router = APIRouter()
 
 # Include sub-routers
 router.include_router(watchlist.router)
 router.include_router(stocks.router)
+router.include_router(screener.router)
 router.include_router(fetch.router)
 router.include_router(chart.router)
 router.include_router(signals.router)
